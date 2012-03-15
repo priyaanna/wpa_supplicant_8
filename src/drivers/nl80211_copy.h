@@ -703,7 +703,6 @@ enum nl80211_commands {
 	NL80211_CMD_IM_SCAN_RESULT,
 
 	NL80211_CMD_ROAMING_SUPPORT,
-
 	/* add new commands above here */
 
 	/* used to define NL80211_CMD_MAX below */
@@ -1127,34 +1126,6 @@ enum nl80211_commands {
  *
  * @%NL80211_ATTR_REKEY_DATA: nested attribute containing the information
  *	necessary for GTK rekeying in the device, see &enum nl80211_rekey_data.
- *
- * @%NL80211_ATTR_IM_SCAN_RESULT: Flag attribute to enable intermediate
- *	scan result notification event (%NL80211_CMD_IM_SCAN_RESULT)
- *	for the %NL80211_CMD_TRIGGER_SCAN command.
- *	When set: will notify on each new scan result in the cache.
- * @%NL80211_ATTR_IM_SCAN_RESULT_MIN_RSSI: Intermediate event filtering.
- *	When set: will notify only those new scan result whose signal
- *	strength of probe response/beacon (in dBm) is stronger than this
- *	negative value (usually: -20 dBm > X > -95 dBm).
- *
- * @%NL80211_ATTR_CAPABILITIES: Flags (u32) attribute to expose device
- *	capabilities flags which defined in nl80211_device_capabilities.
- *
- * @%NL80211_ATTR_SCAN_MIN_DWELL: Minimum scan dwell time (in TUs), u32
- *	attribute to setup minimum time to wait on each channel, if received
- *	at least one probe response during this period will continue waiting
- *	%NL80211_ATTR_SCAN_MAX_DWELL, otherwise will move to next channel.
- *	Relevant only for active scan, used with %NL80211_CMD_TRIGGER_SCAN
- *	command. This is optional attribute, so if it's not set driver should
- *	use hardware default values.
- * @%NL80211_ATTR_SCAN_MAX_DWELL: Maximum scan dwell time (in TUs), u32
- *	attribute to setup maximum time to wait on each channel.
- *	Relevant only for active scan, used with %NL80211_CMD_TRIGGER_SCAN
- *	command. This is optional attribute, so if it's not set driver should
- *	use hardware default values.
- * @%NL80211_ATTR_SCAN_NUM_PROBE:  Attribute (u8) to setup number of probe
- *	requests to transmit on each active scan channel, used with
- *	%NL80211_CMD_TRIGGER_SCAN command.
  *
  * @NL80211_ATTR_SCAN_SUPP_RATES: rates per to be advertised as supported in scan,
  *	nested array attribute containing an entry for each band, with the entry
@@ -1617,7 +1588,6 @@ enum nl80211_iftype {
  *	attempts to change it will silently be ignored (rather than rejected
  *	as errors.)
  * @NL80211_STA_FLAG_MAX: highest station flag number currently defined
- * @NL80211_STA_FLAG_PRE_ASSOC: station is pre-associated
  * @__NL80211_STA_FLAG_AFTER_LAST: internal use
  */
 enum nl80211_sta_flags {
@@ -1628,7 +1598,6 @@ enum nl80211_sta_flags {
 	NL80211_STA_FLAG_MFP,
 	NL80211_STA_FLAG_AUTHENTICATED,
 	NL80211_STA_FLAG_TDLS_PEER,
-	NL80211_STA_FLAG_PRE_ASSOC,
 
 	/* keep last */
 	__NL80211_STA_FLAG_AFTER_LAST,
@@ -2181,6 +2150,9 @@ enum nl80211_mntr_flags {
  * TUs) during which a mesh STA can send only one Action frame containing a
  * PERR element.
  *
+ * @NL80211_MESHCONF_FORWARDING: set Mesh STA as forwarding or non-forwarding
+ * or forwarding entity (default is TRUE - forwarding entity)
+ *
  * @NL80211_MESHCONF_ATTR_MAX: highest possible mesh configuration attribute
  *
  * @__NL80211_MESHCONF_ATTR_AFTER_LAST: internal use
@@ -2205,6 +2177,7 @@ enum nl80211_meshconf_params {
 	NL80211_MESHCONF_HWMP_RANN_INTERVAL,
 	NL80211_MESHCONF_GATE_ANNOUNCEMENTS,
 	NL80211_MESHCONF_HWMP_PERR_MIN_INTERVAL,
+	NL80211_MESHCONF_FORWARDING,
 
 	/* keep last */
 	__NL80211_MESHCONF_ATTR_AFTER_LAST,
@@ -2897,23 +2870,6 @@ enum nl80211_probe_resp_offload_support_attr {
 	NL80211_PROBE_RESP_OFFLOAD_SUPPORT_WPS2 =	1<<1,
 	NL80211_PROBE_RESP_OFFLOAD_SUPPORT_P2P =	1<<2,
 	NL80211_PROBE_RESP_OFFLOAD_SUPPORT_80211U =	1<<3,
-};
-
-/**
- * enum nl80211_device_capabilities - device capabilities flags.
- * @NL80211_DEV_CAPA_SUPPORTS_CANCEL_SCAN: device supports cancel scan command.
- * @NL80211_DEV_CAPA_SUPPORTS_IM_SCAN_EVENT: device supports intermediate scan
- * events.
- */
-enum nl80211_device_capabilities {
-	NL80211_DEV_CAPA_SUPPORTS_CANCEL_SCAN	= (1<<0),
-	NL80211_DEV_CAPA_SUPPORTS_IM_SCAN_EVENT	= (1<<1),
-
-	/* add new flags above here */
-
-	/* keep last */
-	NUM_NL80211_DEV_CAPA,
-	MAX_NL80211_DEV_CAPA = NUM_NL80211_DEV_CAPA - 1
 };
 
 #endif /* __LINUX_NL80211_H */

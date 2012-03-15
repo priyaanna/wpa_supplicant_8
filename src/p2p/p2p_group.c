@@ -21,7 +21,6 @@
 #include "wps/wps_i.h"
 #include "p2p_i.h"
 #include "p2p.h"
-#include "wfd/wfd_i.h"
 
 
 struct p2p_group_member {
@@ -148,8 +147,11 @@ static void p2p_group_add_common_ies(struct p2p_group *group,
 	dev_capab |= P2P_DEV_CAPAB_SERVICE_DISCOVERY;
 	dev_capab |= P2P_DEV_CAPAB_INVITATION_PROCEDURE;
 	group_capab |= P2P_GROUP_CAPAB_GROUP_OWNER;
-	if (group->cfg->persistent_group)
+	if (group->cfg->persistent_group) {
 		group_capab |= P2P_GROUP_CAPAB_PERSISTENT_GROUP;
+		if (group->cfg->persistent_group == 2)
+			group_capab |= P2P_GROUP_CAPAB_PERSISTENT_RECONN;
+	}
 	if (group->p2p->cfg->p2p_intra_bss)
 		group_capab |= P2P_GROUP_CAPAB_INTRA_BSS_DIST;
 	if (group->group_formation)
@@ -184,12 +186,7 @@ static struct wpabuf * p2p_group_build_beacon_ie(struct p2p_group *group)
 
 	len = p2p_buf_add_ie_hdr(ie);
 	p2p_group_add_common_ies(group, ie);
-#ifdef ANDROID_BRCM_P2P_PATCH
-	/* P2P_ADDR: Use p2p_dev_addr instead of own mac addr*/
-	p2p_buf_add_device_id(ie, group->p2p->cfg->p2p_dev_addr);
-#else
 	p2p_buf_add_device_id(ie, group->p2p->cfg->dev_addr);
-#endif
 	p2p_group_add_noa(ie, group->noa);
 	p2p_buf_update_ie_hdr(ie, len);
 
@@ -316,6 +313,36 @@ static struct wpabuf * p2p_build_client_info(const u8 *addr,
 }
 
 
+static int p2p_group_remove_member(struct p2p_group *group, const u8 *addr)
+{
+	struct p2p_group_member *m, *prev;
+
+	if (group == NULL)
+		return 0;
+
+	m = group->members;
+	prev = NULL;
+	while (m) {
+		if (os_memcmp(m->addr, addr, ETH_ALEN) == 0)
+			break;
+		prev = m;
+		m = m->next;
+	}
+
+	if (m == NULL)
+		return 0;
+
+	if (prev)
+		prev->next = m->next;
+	else
+		group->members = m->next;
+	p2p_group_free_member(m);
+	group->num_members--;
+
+	return 1;
+}
+
+
 int p2p_group_notif_assoc(struct p2p_group *group, const u8 *addr,
 			  const u8 *ie, size_t len)
 {
@@ -334,10 +361,9 @@ int p2p_group_notif_assoc(struct p2p_group *group, const u8 *addr,
 						       &m->dev_capab,
 						       m->dev_addr);
 	}
-#ifdef CONFIG_WFD
-	/* Notify Wi-Fi display module regarding new associated WFD device */
-	wfd_notify_dev_associated(group->cfg->cb_ctx, group->p2p->wfd, addr);
-#endif /* CONFIG_WFD */
+
+	p2p_group_remove_member(group, addr);
+
 	m->next = group->members;
 	group->members = m;
 	group->num_members++;
@@ -380,29 +406,7 @@ struct wpabuf * p2p_group_assoc_resp_ie(struct p2p_group *group, u8 status)
 
 void p2p_group_notif_disassoc(struct p2p_group *group, const u8 *addr)
 {
-	struct p2p_group_member *m, *prev;
-
-	if (group == NULL)
-		return;
-
-	m = group->members;
-	prev = NULL;
-	while (m) {
-		if (os_memcmp(m->addr, addr, ETH_ALEN) == 0)
-			break;
-		prev = m;
-		m = m->next;
-	}
-#ifdef CONFIG_WFD
-	wfd_notify_dev_diassociated(group->cfg->cb_ctx, group->p2p->wfd, addr);
-#endif /* CONFIG_WFD */
-	if (m) {
-		if (prev)
-			prev->next = m->next;
-		else
-			group->members = m->next;
-		p2p_group_free_member(m);
-		group->num_members--;
+	if (p2p_group_remove_member(group, addr)) {
 		wpa_msg(group->p2p->cfg->msg_ctx, MSG_DEBUG, "P2P: Remove "
 			"client " MACSTR " from group; num_members=%u/%u",
 			MAC2STR(addr), group->num_members,
@@ -486,6 +490,31 @@ int p2p_group_match_dev_type(struct p2p_group *group, struct wpabuf *wps)
 }
 
 
+int p2p_group_match_dev_id(struct p2p_group *group, struct wpabuf *p2p)
+{
+	struct p2p_group_member *m;
+	struct p2p_message msg;
+
+	os_memset(&msg, 0, sizeof(msg));
+	if (p2p_parse_p2p_ie(p2p, &msg))
+		return 1; /* Failed to parse - assume no filter on Device ID */
+
+	if (!msg.device_id)
+		return 1; /* No filter on Device ID */
+
+	if (os_memcmp(msg.device_id, group->p2p->cfg->dev_addr, ETH_ALEN) == 0)
+		return 1; /* Match with our P2P Device Address */
+
+	for (m = group->members; m; m = m->next) {
+		if (os_memcmp(msg.device_id, m->dev_addr, ETH_ALEN) == 0)
+			return 1; /* Match with group client P2P Device Address */
+	}
+
+	/* No match with Device ID */
+	return 0;
+}
+
+
 void p2p_group_notif_formation_done(struct p2p_group *group)
 {
 	if (group == NULL)
@@ -505,11 +534,7 @@ int p2p_group_notif_noa(struct p2p_group *group, const u8 *noa,
 	} else {
 		if (group->noa) {
 			if (wpabuf_size(group->noa) >= noa_len) {
-			#ifdef ANDROID_BRCM_P2P_PATCH
 				group->noa->used = 0;
-			#else
-				group->noa->size = 0;
-			#endif
 				wpabuf_put_data(group->noa, noa, noa_len);
 			} else {
 				wpabuf_free(group->noa);
@@ -557,19 +582,19 @@ static struct p2p_group_member * p2p_group_get_client_iface(
 	return NULL;
 }
 
-#ifdef ANDROID_BRCM_P2P_PATCH
-u8 * p2p_group_get_dev_addr(struct p2p_group *group, const u8 *addr)
+
+const u8 * p2p_group_get_dev_addr(struct p2p_group *group, const u8 *addr)
 {
 	struct p2p_group_member *m;
 
-	m = p2p_group_get_client_iface(group, addr);
-
-	if (m)
-		return m->dev_addr;
-	else
+	if (group == NULL)
 		return NULL;
+	m = p2p_group_get_client_iface(group, addr);
+	if (m && !is_zero_ether_addr(m->dev_addr))
+		return m->dev_addr;
+	return NULL;
 }
-#endif /* ANDROID_BRCM_P2P_PATCH */
+
 
 static struct wpabuf * p2p_build_go_disc_req(void)
 {
@@ -668,11 +693,13 @@ u8 p2p_group_presence_req(struct p2p_group *group,
 	else
 		wpa_hexdump(MSG_DEBUG, "P2P: Current NoA", curr_noa,
 			    curr_noa_len);
+
 #ifndef ANDROID_BRCM_P2P_PATCH
 	/* TODO: properly process request and store copy */
-	if (curr_noa_len > 0)
+	if (curr_noa_len > 0 || curr_noa_len == -1)
 		return P2P_SC_FAIL_UNABLE_TO_ACCOMMODATE;
-#endif
+#endif /* ANDROID_BRCM_P2P_PATCH */
+
 	return P2P_SC_SUCCESS;
 }
 
@@ -698,4 +725,17 @@ const u8 * p2p_iterate_group_members(struct p2p_group *group, void **next)
 		return NULL;
 
 	return iter->addr;
+}
+
+
+int p2p_group_is_client_connected(struct p2p_group *group, const u8 *dev_addr)
+{
+	struct p2p_group_member *m;
+
+	for (m = group->members; m; m = m->next) {
+		if (os_memcmp(m->dev_addr, dev_addr, ETH_ALEN) == 0)
+			return 1;
+	}
+
+	return 0;
 }

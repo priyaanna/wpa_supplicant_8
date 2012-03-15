@@ -35,6 +35,8 @@
 #include "beacon.h"
 
 
+#ifdef NEED_AP_MLME
+
 static u8 ieee802_11_erp_info(struct hostapd_data *hapd)
 {
 	u8 erp = 0;
@@ -43,23 +45,11 @@ static u8 ieee802_11_erp_info(struct hostapd_data *hapd)
 	    hapd->iface->current_mode->mode != HOSTAPD_MODE_IEEE80211G)
 		return 0;
 
-	switch (hapd->iconf->cts_protection_type) {
-	case CTS_PROTECTION_FORCE_ENABLED:
-		erp |= ERP_INFO_NON_ERP_PRESENT | ERP_INFO_USE_PROTECTION;
-		break;
-	case CTS_PROTECTION_FORCE_DISABLED:
-		erp = 0;
-		break;
-	case CTS_PROTECTION_AUTOMATIC:
-		if (hapd->iface->olbc)
-			erp |= ERP_INFO_USE_PROTECTION;
-		/* continue */
-	case CTS_PROTECTION_AUTOMATIC_NO_OLBC:
-		if (hapd->iface->num_sta_non_erp > 0) {
-			erp |= ERP_INFO_NON_ERP_PRESENT |
-				ERP_INFO_USE_PROTECTION;
-		}
-		break;
+	if (hapd->iface->olbc)
+		erp |= ERP_INFO_USE_PROTECTION;
+	if (hapd->iface->num_sta_non_erp > 0) {
+		erp |= ERP_INFO_NON_ERP_PRESENT |
+			ERP_INFO_USE_PROTECTION;
 	}
 	if (hapd->iface->num_sta_no_short_preamble > 0 ||
 	    hapd->iconf->preamble == LONG_PREAMBLE)
@@ -182,8 +172,7 @@ static u8 * hostapd_eid_country(struct hostapd_data *hapd, u8 *eid,
 }
 
 
-static u8 * hostapd_eid_wpa(struct hostapd_data *hapd, u8 *eid, size_t len,
-			    struct sta_info *sta)
+static u8 * hostapd_eid_wpa(struct hostapd_data *hapd, u8 *eid, size_t len)
 {
 	const u8 *ie;
 	size_t ielen;
@@ -195,6 +184,7 @@ static u8 * hostapd_eid_wpa(struct hostapd_data *hapd, u8 *eid, size_t len,
 	os_memcpy(eid, ie, ielen);
 	return eid + ielen;
 }
+
 
 static u8 * hostapd_gen_probe_resp(struct hostapd_data *hapd,
 				   struct sta_info *sta,
@@ -215,10 +205,6 @@ static u8 * hostapd_gen_probe_resp(struct hostapd_data *hapd,
 	if (hapd->p2p_probe_resp_ie)
 		buflen += wpabuf_len(hapd->p2p_probe_resp_ie);
 #endif /* CONFIG_P2P */
-#ifdef CONFIG_WFD
-	if (hapd->wfd_probe_resp_ie)
-		buflen += wpabuf_len(hapd->wfd_probe_resp_ie);
-#endif /* CONFIG_WFD */
 	resp = os_zalloc(buflen);
 	if (resp == NULL)
 		return NULL;
@@ -260,7 +246,7 @@ static u8 * hostapd_gen_probe_resp(struct hostapd_data *hapd,
 	pos = hostapd_eid_ext_supp_rates(hapd, pos);
 
 	/* RSN, MDIE, WPA */
-	pos = hostapd_eid_wpa(hapd, pos, epos - pos, sta);
+	pos = hostapd_eid_wpa(hapd, pos, epos - pos);
 
 #ifdef CONFIG_IEEE80211N
 	pos = hostapd_eid_ht_capabilities(hapd, pos);
@@ -268,6 +254,13 @@ static u8 * hostapd_gen_probe_resp(struct hostapd_data *hapd,
 #endif /* CONFIG_IEEE80211N */
 
 	pos = hostapd_eid_ext_capab(hapd, pos);
+
+	pos = hostapd_eid_time_adv(hapd, pos);
+	pos = hostapd_eid_time_zone(hapd, pos);
+
+	pos = hostapd_eid_interworking(hapd, pos);
+	pos = hostapd_eid_adv_proto(hapd, pos);
+	pos = hostapd_eid_roaming_consortium(hapd, pos);
 
 	/* Wi-Fi Alliance WMM */
 	pos = hostapd_eid_wmm(hapd, pos);
@@ -288,21 +281,16 @@ static u8 * hostapd_gen_probe_resp(struct hostapd_data *hapd,
 		pos += wpabuf_len(hapd->p2p_probe_resp_ie);
 	}
 #endif /* CONFIG_P2P */
-#ifdef CONFIG_WFD
-        if (hapd->wfd_probe_resp_ie) {
-                os_memcpy(pos, wpabuf_head(hapd->wfd_probe_resp_ie),
-                          wpabuf_len(hapd->wfd_probe_resp_ie));
-                pos += wpabuf_len(hapd->wfd_probe_resp_ie);
-        }
-#endif /* CONFIG_WFD */
 #ifdef CONFIG_P2P_MANAGER
 	if ((hapd->conf->p2p & (P2P_MANAGE | P2P_ENABLED | P2P_GROUP_OWNER)) ==
 	    P2P_MANAGE)
 		pos = hostapd_eid_p2p_manage(hapd, pos);
 #endif /* CONFIG_P2P_MANAGER */
+
 	*resp_len = pos - (u8 *) resp;
 	return (u8 *) resp;
 }
+
 
 void handle_probe_req(struct hostapd_data *hapd,
 		      const struct ieee80211_mgmt *mgmt, size_t len)
@@ -313,6 +301,7 @@ void handle_probe_req(struct hostapd_data *hapd,
 	size_t ie_len;
 	struct sta_info *sta = NULL;
 	size_t i, resp_len;
+	int noack;
 
 	ie = mgmt->u.probe_req.variable;
 	if (len < IEEE80211_HDRLEN + sizeof(mgmt->u.probe_req))
@@ -322,9 +311,11 @@ void handle_probe_req(struct hostapd_data *hapd,
 #ifndef ANDROID_BRCM_P2P_PATCH
 	for (i = 0; hapd->probereq_cb && i < hapd->num_probereq_cb; i++)
 		if (hapd->probereq_cb[i].cb(hapd->probereq_cb[i].ctx,
-					    mgmt->sa, ie, ie_len) > 0)
+					    mgmt->sa, mgmt->da, mgmt->bssid,
+					    ie, ie_len) > 0)
 			return;
-#endif
+#endif /* ANDROID_BRCM_P2P_PATCH */
+
 	if (!hapd->iconf->send_probe_response)
 		return;
 
@@ -353,6 +344,18 @@ void handle_probe_req(struct hostapd_data *hapd,
 			return;
 		}
 		wpabuf_free(wps);
+	}
+
+	if (hapd->p2p && elems.p2p) {
+		struct wpabuf *p2p;
+		p2p = ieee802_11_vendor_ie_concat(ie, ie_len, P2P_IE_VENDOR_TYPE);
+		if (p2p && !p2p_group_match_dev_id(hapd->p2p_group, p2p)) {
+			wpa_printf(MSG_MSGDUMP, "P2P: Ignore Probe Request "
+				   "due to mismatch with Device ID");
+			wpabuf_free(p2p);
+			return;
+		}
+		wpabuf_free(p2p);
 	}
 #endif /* CONFIG_P2P */
 
@@ -393,14 +396,51 @@ void handle_probe_req(struct hostapd_data *hapd,
 		return;
 	}
 
+#ifdef CONFIG_INTERWORKING
+	if (elems.interworking && elems.interworking_len >= 1) {
+		u8 ant = elems.interworking[0] & 0x0f;
+		if (ant != INTERWORKING_ANT_WILDCARD &&
+		    ant != hapd->conf->access_network_type) {
+			wpa_printf(MSG_MSGDUMP, "Probe Request from " MACSTR
+				   " for mismatching ANT %u ignored",
+				   MAC2STR(mgmt->sa), ant);
+			return;
+		}
+	}
+
+	if (elems.interworking &&
+	    (elems.interworking_len == 7 || elems.interworking_len == 9)) {
+		const u8 *hessid;
+		if (elems.interworking_len == 7)
+			hessid = elems.interworking + 1;
+		else
+			hessid = elems.interworking + 1 + 2;
+		if (!is_broadcast_ether_addr(hessid) &&
+		    os_memcmp(hessid, hapd->conf->hessid, ETH_ALEN) != 0) {
+			wpa_printf(MSG_MSGDUMP, "Probe Request from " MACSTR
+				   " for mismatching HESSID " MACSTR
+				   " ignored",
+				   MAC2STR(mgmt->sa), MAC2STR(hessid));
+			return;
+		}
+	}
+#endif /* CONFIG_INTERWORKING */
+
 	/* TODO: verify that supp_rates contains at least one matching rate
 	 * with AP configuration */
+
 	resp = hostapd_gen_probe_resp(hapd, sta, mgmt, elems.p2p != NULL,
-					&resp_len);
+				      &resp_len);
 	if (resp == NULL)
 		return;
 
-	if (hostapd_drv_send_mlme(hapd, resp, resp_len) < 0)
+	/*
+	 * If this is a broadcast probe request, apply no ack policy to avoid
+	 * excessive retries.
+	 */
+	noack = !!(elems.ssid_len == 0 && is_broadcast_ether_addr(mgmt->da));
+
+	if (hostapd_drv_send_mlme(hapd, resp, resp_len, noack) < 0)
 		perror("handle_probe_req: send");
 
 	os_free(resp);
@@ -411,22 +451,61 @@ void handle_probe_req(struct hostapd_data *hapd,
 }
 
 
+static u8 * hostapd_probe_resp_offloads(struct hostapd_data *hapd,
+					size_t *resp_len)
+{
+	/* check probe response offloading caps and print warnings */
+	if (!(hapd->iface->drv_flags & WPA_DRIVER_FLAGS_PROBE_RESP_OFFLOAD))
+		return NULL;
+
+#ifdef CONFIG_WPS
+	if (hapd->conf->wps_state && hapd->wps_probe_resp_ie &&
+	    (!(hapd->iface->probe_resp_offloads &
+	       (WPA_DRIVER_PROBE_RESP_OFFLOAD_WPS |
+		WPA_DRIVER_PROBE_RESP_OFFLOAD_WPS2))))
+		wpa_printf(MSG_WARNING, "Device is trying to offload WPS "
+			   "Probe Response while not supporting this");
+#endif /* CONFIG_WPS */
+
+#ifdef CONFIG_P2P
+	if ((hapd->conf->p2p & P2P_ENABLED) && hapd->p2p_probe_resp_ie &&
+	    !(hapd->iface->probe_resp_offloads &
+	      WPA_DRIVER_PROBE_RESP_OFFLOAD_P2P))
+		wpa_printf(MSG_WARNING, "Device is trying to offload P2P "
+			   "Probe Response while not supporting this");
+#endif  /* CONFIG_P2P */
+
+	if (hapd->conf->interworking &&
+	    !(hapd->iface->probe_resp_offloads &
+	      WPA_DRIVER_PROBE_RESP_OFFLOAD_INTERWORKING))
+		wpa_printf(MSG_WARNING, "Device is trying to offload "
+			   "Interworking Probe Response while not supporting "
+			   "this");
+
+	/* Generate a Probe Response template for the non-P2P case */
+	return hostapd_gen_probe_resp(hapd, NULL, NULL, 0, resp_len);
+}
+
+#endif /* NEED_AP_MLME */
+
+
 void ieee802_11_set_beacon(struct hostapd_data *hapd)
 {
-	struct ieee80211_mgmt *head;
-	u8 *pos, *tail, *tailpos;
-	u16 capab_info;
-	size_t head_len, tail_len;
+	struct ieee80211_mgmt *head = NULL;
+	u8 *tail = NULL;
+	size_t head_len = 0, tail_len = 0;
 	u8 *resp = NULL;
 	size_t resp_len = 0;
 	struct wpa_driver_ap_params params;
 	struct wpabuf *beacon, *proberesp, *assocresp;
+#ifdef NEED_AP_MLME
+	u16 capab_info;
+	u8 *pos, *tailpos;
+#endif /* NEED_AP_MLME */
 
-#ifdef CONFIG_P2P
-	if ((hapd->conf->p2p & (P2P_ENABLED | P2P_GROUP_OWNER)) == P2P_ENABLED)
-		goto no_beacon;
-#endif /* CONFIG_P2P */
 	hapd->beacon_set_done = 1;
+
+#ifdef NEED_AP_MLME
 
 #define BEACON_HEAD_BUF_SIZE 256
 #define BEACON_TAIL_BUF_SIZE 512
@@ -440,10 +519,6 @@ void ieee802_11_set_beacon(struct hostapd_data *hapd)
 	if (hapd->p2p_beacon_ie)
 		tail_len += wpabuf_len(hapd->p2p_beacon_ie);
 #endif /* CONFIG_P2P */
-#ifdef CONFIG_WFD
-	if (hapd->wfd_beacon_ie)
-		tail_len += wpabuf_len(hapd->wfd_beacon_ie);
-#endif /* CONFIG_WFD */
 	tailpos = tail = os_malloc(tail_len);
 	if (head == NULL || tail == NULL) {
 		wpa_printf(MSG_ERROR, "Failed to set beacon data");
@@ -502,7 +577,7 @@ void ieee802_11_set_beacon(struct hostapd_data *hapd)
 
 	/* RSN, MDIE, WPA */
 	tailpos = hostapd_eid_wpa(hapd, tailpos, tail + BEACON_TAIL_BUF_SIZE -
-				  tailpos, NULL);
+				  tailpos);
 
 #ifdef CONFIG_IEEE80211N
 	tailpos = hostapd_eid_ht_capabilities(hapd, tailpos);
@@ -510,6 +585,16 @@ void ieee802_11_set_beacon(struct hostapd_data *hapd)
 #endif /* CONFIG_IEEE80211N */
 
 	tailpos = hostapd_eid_ext_capab(hapd, tailpos);
+
+	/*
+	 * TODO: Time Advertisement element should only be included in some
+	 * DTIM Beacon frames.
+	 */
+	tailpos = hostapd_eid_time_adv(hapd, tailpos);
+
+	tailpos = hostapd_eid_interworking(hapd, tailpos);
+	tailpos = hostapd_eid_adv_proto(hapd, tailpos);
+	tailpos = hostapd_eid_roaming_consortium(hapd, tailpos);
 
 	/* Wi-Fi Alliance WMM */
 	tailpos = hostapd_eid_wmm(hapd, tailpos);
@@ -529,13 +614,6 @@ void ieee802_11_set_beacon(struct hostapd_data *hapd)
 		tailpos += wpabuf_len(hapd->p2p_beacon_ie);
 	}
 #endif /* CONFIG_P2P */
-#ifdef CONFIG_WFD
-	if (hapd->wfd_beacon_ie /* TBD add configuration condition */) {
-		os_memcpy(tailpos, wpabuf_head(hapd->wfd_beacon_ie),
-			  wpabuf_len(hapd->wfd_beacon_ie));
-		tailpos += wpabuf_len(hapd->wfd_beacon_ie);
-	}
-#endif /* CONFIG_WFD */
 #ifdef CONFIG_P2P_MANAGER
 	if ((hapd->conf->p2p & (P2P_MANAGE | P2P_ENABLED | P2P_GROUP_OWNER)) ==
 	    P2P_MANAGE)
@@ -543,7 +621,9 @@ void ieee802_11_set_beacon(struct hostapd_data *hapd)
 #endif /* CONFIG_P2P_MANAGER */
 
 	tail_len = tailpos > tail ? tailpos - tail : 0;
-	resp = hostapd_gen_probe_resp(hapd, NULL, NULL, 0, &resp_len);
+
+	resp = hostapd_probe_resp_offloads(hapd, &resp_len);
+#endif /* NEED_AP_MLME */
 
 	os_memset(&params, 0, sizeof(params));
 	params.head = (u8 *) head;
@@ -554,6 +634,7 @@ void ieee802_11_set_beacon(struct hostapd_data *hapd)
 	params.proberesp_len = resp_len;
 	params.dtim_period = hapd->conf->dtim_period;
 	params.beacon_int = hapd->iconf->beacon_int;
+	params.basic_rates = hapd->iconf->basic_rates;
 	params.ssid = (u8 *) hapd->conf->ssid.ssid;
 	params.ssid_len = hapd->conf->ssid.ssid_len;
 	params.pairwise_ciphers = hapd->conf->rsn_pairwise ?
@@ -581,6 +662,28 @@ void ieee802_11_set_beacon(struct hostapd_data *hapd)
 	params.beacon_ies = beacon;
 	params.proberesp_ies = proberesp;
 	params.assocresp_ies = assocresp;
+	params.isolate = hapd->conf->isolate;
+#ifdef NEED_AP_MLME
+	params.cts_protect = !!(ieee802_11_erp_info(hapd) &
+				ERP_INFO_USE_PROTECTION);
+	params.preamble = hapd->iface->num_sta_no_short_preamble == 0 &&
+		hapd->iconf->preamble == SHORT_PREAMBLE;
+	if (hapd->iface->current_mode &&
+	    hapd->iface->current_mode->mode == HOSTAPD_MODE_IEEE80211G)
+		params.short_slot_time =
+			hapd->iface->num_sta_no_short_slot_time > 0 ? 0 : 1;
+	else
+		params.short_slot_time = -1;
+	if (!hapd->iconf->ieee80211n || hapd->conf->disable_11n)
+		params.ht_opmode = -1;
+	else
+		params.ht_opmode = hapd->iface->ht_op_mode;
+#endif /* NEED_AP_MLME */
+	params.interworking = hapd->conf->interworking;
+	if (hapd->conf->interworking &&
+	    !is_zero_ether_addr(hapd->conf->hessid))
+		params.hessid = hapd->conf->hessid;
+	params.access_network_type = hapd->conf->access_network_type;
 	if (hostapd_drv_set_ap(hapd, &params))
 		wpa_printf(MSG_ERROR, "Failed to set beacon parameters");
 	hostapd_free_ap_extra_ies(hapd, beacon, proberesp, assocresp);
@@ -588,12 +691,6 @@ void ieee802_11_set_beacon(struct hostapd_data *hapd)
 	os_free(tail);
 	os_free(head);
 	os_free(resp);
-
-#ifdef CONFIG_P2P
-no_beacon:
-#endif /* CONFIG_P2P */
-	hostapd_set_bss_params(hapd, !!(ieee802_11_erp_info(hapd) &
-					ERP_INFO_USE_PROTECTION));
 }
 
 
@@ -605,6 +702,3 @@ void ieee802_11_set_beacons(struct hostapd_iface *iface)
 }
 
 #endif /* CONFIG_NATIVE_WINDOWS */
-
-
-

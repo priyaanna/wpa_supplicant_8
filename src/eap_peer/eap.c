@@ -147,6 +147,7 @@ SM_STATE(EAP, INITIALIZE)
 	sm->methodState = METHOD_NONE;
 	sm->allowNotifications = TRUE;
 	sm->decision = DECISION_FAIL;
+	sm->ClientTimeout = EAP_CLIENT_TIMEOUT_DEFAULT;
 	eapol_set_int(sm, EAPOL_idleWhile, sm->ClientTimeout);
 	eapol_set_bool(sm, EAPOL_eapSuccess, FALSE);
 	eapol_set_bool(sm, EAPOL_eapFail, FALSE);
@@ -877,6 +878,69 @@ static void eap_sm_processIdentity(struct eap_sm *sm, const struct wpabuf *req)
 
 
 #ifdef PCSC_FUNCS
+
+/*
+ * Rules for figuring out MNC length based on IMSI for SIM cards that do not
+ * include MNC length field.
+ */
+static int mnc_len_from_imsi(const char *imsi)
+{
+	char mcc_str[4];
+	unsigned int mcc;
+
+	os_memcpy(mcc_str, imsi, 3);
+	mcc_str[3] = '\0';
+	mcc = atoi(mcc_str);
+
+	if (mcc == 244)
+		return 2; /* Networks in Finland use 2-digit MNC */
+
+	return -1;
+}
+
+
+static int eap_sm_append_3gpp_realm(struct eap_sm *sm, char *imsi,
+				    size_t max_len, size_t *imsi_len)
+{
+	int mnc_len;
+	char *pos, mnc[4];
+
+	if (*imsi_len + 36 > max_len) {
+		wpa_printf(MSG_WARNING, "No room for realm in IMSI buffer");
+		return -1;
+	}
+
+	/* MNC (2 or 3 digits) */
+	mnc_len = scard_get_mnc_len(sm->scard_ctx);
+	if (mnc_len < 0)
+		mnc_len = mnc_len_from_imsi(imsi);
+	if (mnc_len < 0) {
+		wpa_printf(MSG_INFO, "Failed to get MNC length from (U)SIM "
+			   "assuming 3");
+		mnc_len = 3;
+	}
+
+	if (mnc_len == 2) {
+		mnc[0] = '0';
+		mnc[1] = imsi[3];
+		mnc[2] = imsi[4];
+	} else if (mnc_len == 3) {
+		mnc[0] = imsi[3];
+		mnc[1] = imsi[4];
+		mnc[2] = imsi[5];
+	}
+	mnc[3] = '\0';
+
+	pos = imsi + *imsi_len;
+	pos += os_snprintf(pos, imsi + max_len - pos,
+			   "@wlan.mnc%s.mcc%c%c%c.3gppnetwork.org",
+			   mnc, imsi[0], imsi[1], imsi[2]);
+	*imsi_len = pos - imsi;
+
+	return 0;
+}
+
+
 static int eap_sm_imsi_identity(struct eap_sm *sm,
 				struct eap_peer_config *conf)
 {
@@ -893,6 +957,17 @@ static int eap_sm_imsi_identity(struct eap_sm *sm,
 	}
 
 	wpa_hexdump_ascii(MSG_DEBUG, "IMSI", (u8 *) imsi, imsi_len);
+
+	if (imsi_len < 7) {
+		wpa_printf(MSG_WARNING, "Too short IMSI for SIM identity");
+		return -1;
+	}
+
+	if (eap_sm_append_3gpp_realm(sm, imsi, sizeof(imsi), &imsi_len) < 0) {
+		wpa_printf(MSG_WARNING, "Could not add realm to SIM identity");
+		return -1;
+	}
+	wpa_hexdump_ascii(MSG_DEBUG, "IMSI + realm", (u8 *) imsi, imsi_len);
 
 	for (i = 0; m && (m[i].vendor != EAP_VENDOR_IETF ||
 			  m[i].method != EAP_TYPE_NONE); i++) {
@@ -917,6 +992,7 @@ static int eap_sm_imsi_identity(struct eap_sm *sm,
 
 	return 0;
 }
+
 #endif /* PCSC_FUNCS */
 
 
@@ -1242,6 +1318,7 @@ struct eap_sm * eap_peer_sm_init(void *eapol_ctx,
 #endif /* CONFIG_FIPS */
 	tlsconf.event_cb = eap_peer_sm_tls_event;
 	tlsconf.cb_ctx = sm;
+	tlsconf.cert_in_cb = conf->cert_in_cb;
 	sm->ssl_ctx = tls_init(&tlsconf);
 	if (sm->ssl_ctx == NULL) {
 		wpa_printf(MSG_WARNING, "SSL: Failed to initialize TLS "
@@ -1466,16 +1543,11 @@ int eap_sm_get_status(struct eap_sm *sm, char *buf, size_t buflen, int verbose)
 
 
 #if defined(CONFIG_CTRL_IFACE) || !defined(CONFIG_NO_STDOUT_DEBUG)
-typedef enum {
-	TYPE_IDENTITY, TYPE_PASSWORD, TYPE_OTP, TYPE_PIN, TYPE_NEW_PASSWORD,
-	TYPE_PASSPHRASE
-} eap_ctrl_req_type;
-
-static void eap_sm_request(struct eap_sm *sm, eap_ctrl_req_type type,
+static void eap_sm_request(struct eap_sm *sm, enum wpa_ctrl_req_type field,
 			   const char *msg, size_t msglen)
 {
 	struct eap_peer_config *config;
-	char *field, *txt, *tmp;
+	char *txt = NULL, *tmp;
 
 	if (sm == NULL)
 		return;
@@ -1483,29 +1555,20 @@ static void eap_sm_request(struct eap_sm *sm, eap_ctrl_req_type type,
 	if (config == NULL)
 		return;
 
-	switch (type) {
-	case TYPE_IDENTITY:
-		field = "IDENTITY";
-		txt = "Identity";
+	switch (field) {
+	case WPA_CTRL_REQ_EAP_IDENTITY:
 		config->pending_req_identity++;
 		break;
-	case TYPE_PASSWORD:
-		field = "PASSWORD";
-		txt = "Password";
+	case WPA_CTRL_REQ_EAP_PASSWORD:
 		config->pending_req_password++;
 		break;
-	case TYPE_NEW_PASSWORD:
-		field = "NEW_PASSWORD";
-		txt = "New Password";
+	case WPA_CTRL_REQ_EAP_NEW_PASSWORD:
 		config->pending_req_new_password++;
 		break;
-	case TYPE_PIN:
-		field = "PIN";
-		txt = "PIN";
+	case WPA_CTRL_REQ_EAP_PIN:
 		config->pending_req_pin++;
 		break;
-	case TYPE_OTP:
-		field = "OTP";
+	case WPA_CTRL_REQ_EAP_OTP:
 		if (msg) {
 			tmp = os_malloc(msglen + 3);
 			if (tmp == NULL)
@@ -1524,9 +1587,7 @@ static void eap_sm_request(struct eap_sm *sm, eap_ctrl_req_type type,
 			txt = config->pending_req_otp;
 		}
 		break;
-	case TYPE_PASSPHRASE:
-		field = "PASSPHRASE";
-		txt = "Private key passphrase";
+	case WPA_CTRL_REQ_EAP_PASSPHRASE:
 		config->pending_req_passphrase++;
 		break;
 	default:
@@ -1559,7 +1620,7 @@ const char * eap_sm_get_method_name(struct eap_sm *sm)
  */
 void eap_sm_request_identity(struct eap_sm *sm)
 {
-	eap_sm_request(sm, TYPE_IDENTITY, NULL, 0);
+	eap_sm_request(sm, WPA_CTRL_REQ_EAP_IDENTITY, NULL, 0);
 }
 
 
@@ -1574,7 +1635,7 @@ void eap_sm_request_identity(struct eap_sm *sm)
  */
 void eap_sm_request_password(struct eap_sm *sm)
 {
-	eap_sm_request(sm, TYPE_PASSWORD, NULL, 0);
+	eap_sm_request(sm, WPA_CTRL_REQ_EAP_PASSWORD, NULL, 0);
 }
 
 
@@ -1589,7 +1650,7 @@ void eap_sm_request_password(struct eap_sm *sm)
  */
 void eap_sm_request_new_password(struct eap_sm *sm)
 {
-	eap_sm_request(sm, TYPE_NEW_PASSWORD, NULL, 0);
+	eap_sm_request(sm, WPA_CTRL_REQ_EAP_NEW_PASSWORD, NULL, 0);
 }
 
 
@@ -1604,7 +1665,7 @@ void eap_sm_request_new_password(struct eap_sm *sm)
  */
 void eap_sm_request_pin(struct eap_sm *sm)
 {
-	eap_sm_request(sm, TYPE_PIN, NULL, 0);
+	eap_sm_request(sm, WPA_CTRL_REQ_EAP_PIN, NULL, 0);
 }
 
 
@@ -1620,7 +1681,7 @@ void eap_sm_request_pin(struct eap_sm *sm)
  */
 void eap_sm_request_otp(struct eap_sm *sm, const char *msg, size_t msg_len)
 {
-	eap_sm_request(sm, TYPE_OTP, msg, msg_len);
+	eap_sm_request(sm, WPA_CTRL_REQ_EAP_OTP, msg, msg_len);
 }
 
 
@@ -1635,7 +1696,7 @@ void eap_sm_request_otp(struct eap_sm *sm, const char *msg, size_t msg_len)
  */
 void eap_sm_request_passphrase(struct eap_sm *sm)
 {
-	eap_sm_request(sm, TYPE_PASSPHRASE, NULL, 0);
+	eap_sm_request(sm, WPA_CTRL_REQ_EAP_PASSPHRASE, NULL, 0);
 }
 
 

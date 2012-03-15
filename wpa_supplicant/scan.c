@@ -20,7 +20,6 @@
 #include "config.h"
 #include "wpa_supplicant_i.h"
 #include "driver_i.h"
-#include "mlme.h"
 #include "wps_supplicant.h"
 #include "p2p_supplicant.h"
 #include "p2p/p2p.h"
@@ -72,10 +71,12 @@ static int wpas_wps_in_use(struct wpa_supplicant *wpa_s,
 	}
 
 #ifdef CONFIG_P2P
-	wpa_s->wps->dev.p2p = 1;
-	if (!wps) {
-		wps = 1;
-		*req_type = WPS_REQ_ENROLLEE_INFO;
+	if (!wpa_s->global->p2p_disabled && wpa_s->global->p2p) {
+		wpa_s->wps->dev.p2p = 1;
+		if (!wps) {
+			wps = 1;
+			*req_type = WPS_REQ_ENROLLEE_INFO;
+		}
 	}
 #endif /* CONFIG_P2P */
 
@@ -200,16 +201,14 @@ int wpa_supplicant_trigger_scan(struct wpa_supplicant *wpa_s,
 
 	wpa_supplicant_notify_scanning(wpa_s, 1);
 
-	if (wpa_s->drv_flags & WPA_DRIVER_FLAGS_USER_SPACE_MLME)
-		ret = ieee80211_sta_req_scan(wpa_s, params);
-	else
-		ret = wpa_drv_scan(wpa_s, params);
-
+	ret = wpa_drv_scan(wpa_s, params);
 	if (ret) {
 		wpa_supplicant_notify_scanning(wpa_s, 0);
 		wpas_notify_scan_done(wpa_s, 0);
-	} else
+	} else {
 		wpa_s->scan_runs++;
+		wpa_s->normal_scans++;
+	}
 
 	return ret;
 }
@@ -235,9 +234,6 @@ wpa_supplicant_start_sched_scan(struct wpa_supplicant *wpa_s,
 {
 	int ret;
 
-	if (wpa_s->drv_flags & WPA_DRIVER_FLAGS_USER_SPACE_MLME)
-		return -EOPNOTSUPP;
-
 	ret = wpa_drv_sched_scan(wpa_s, params,
 				 long_interval * 1000,
 				 short_interval * 1000,
@@ -261,6 +257,7 @@ static int wpa_supplicant_stop_sched_scan(struct wpa_supplicant *wpa_s)
 
 	return ret;
 }
+
 
 static struct wpa_driver_scan_filter *
 wpa_supplicant_build_filter_ssids(struct wpa_config *conf, size_t *num_ssids)
@@ -294,8 +291,9 @@ wpa_supplicant_build_filter_ssids(struct wpa_config *conf, size_t *num_ssids)
 	return ssids;
 }
 
-static void wpa_supplicant_optimize_freqs(struct wpa_supplicant *wpa_s,
-					  struct wpa_driver_scan_params *params)
+
+static void wpa_supplicant_optimize_freqs(
+	struct wpa_supplicant *wpa_s, struct wpa_driver_scan_params *params)
 {
 #ifdef CONFIG_P2P
 	if (params->freqs == NULL && wpa_s->p2p_in_provisioning &&
@@ -336,55 +334,96 @@ static void wpa_supplicant_optimize_freqs(struct wpa_supplicant *wpa_s,
 		wpa_s->after_wps--;
 	}
 
+	if (params->freqs == NULL && wpa_s->known_wps_freq && wpa_s->wps_freq)
+	{
+		/* Optimize provisioning scan based on already known channel */
+		wpa_dbg(wpa_s, MSG_DEBUG, "WPS: Scan only frequency %u MHz",
+			wpa_s->wps_freq);
+		params->freqs = os_zalloc(2 * sizeof(int));
+		if (params->freqs)
+			params->freqs[0] = wpa_s->wps_freq;
+		wpa_s->known_wps_freq = 0; /* only do this once */
+	}
 #endif /* CONFIG_WPS */
 }
 
-struct wpabuf *wpa_supplicant_extra_ies(struct wpa_supplicant *wpa_s,
-					struct wpa_driver_scan_params *params)
+
+#ifdef CONFIG_INTERWORKING
+static void wpas_add_interworking_elements(struct wpa_supplicant *wpa_s,
+					   struct wpabuf *buf)
 {
-	struct wpabuf *wps_ie = NULL;
+	if (wpa_s->conf->interworking == 0)
+		return;
+
+	wpabuf_put_u8(buf, WLAN_EID_EXT_CAPAB);
+	wpabuf_put_u8(buf, 4);
+	wpabuf_put_u8(buf, 0x00);
+	wpabuf_put_u8(buf, 0x00);
+	wpabuf_put_u8(buf, 0x00);
+	wpabuf_put_u8(buf, 0x80); /* Bit 31 - Interworking */
+
+	wpabuf_put_u8(buf, WLAN_EID_INTERWORKING);
+	wpabuf_put_u8(buf, is_zero_ether_addr(wpa_s->conf->hessid) ? 1 :
+		      1 + ETH_ALEN);
+	wpabuf_put_u8(buf, wpa_s->conf->access_network_type);
+	/* No Venue Info */
+	if (!is_zero_ether_addr(wpa_s->conf->hessid))
+		wpabuf_put_data(buf, wpa_s->conf->hessid, ETH_ALEN);
+}
+#endif /* CONFIG_INTERWORKING */
+
+
+static struct wpabuf *
+wpa_supplicant_extra_ies(struct wpa_supplicant *wpa_s,
+			 struct wpa_driver_scan_params *params)
+{
+	struct wpabuf *extra_ie = NULL;
 #ifdef CONFIG_WPS
 	int wps = 0;
 	enum wps_request_type req_type = WPS_REQ_ENROLLEE_INFO;
+#endif /* CONFIG_WPS */
 
+#ifdef CONFIG_INTERWORKING
+	if (wpa_s->conf->interworking &&
+	    wpabuf_resize(&extra_ie, 100) == 0)
+		wpas_add_interworking_elements(wpa_s, extra_ie);
+#endif /* CONFIG_INTERWORKING */
+
+#ifdef CONFIG_WPS
 	wps = wpas_wps_in_use(wpa_s, &req_type);
 
 	if (wps) {
+		struct wpabuf *wps_ie;
 		wps_ie = wps_build_probe_req_ie(wps == 2, &wpa_s->wps->dev,
 						wpa_s->wps->uuid, req_type,
 						0, NULL);
 		if (wps_ie) {
-			params->extra_ies = wpabuf_head(wps_ie);
-			params->extra_ies_len = wpabuf_len(wps_ie);
+			if (wpabuf_resize(&extra_ie, wpabuf_len(wps_ie)) == 0)
+				wpabuf_put_buf(extra_ie, wps_ie);
+			wpabuf_free(wps_ie);
 		}
 	}
 
 #ifdef CONFIG_P2P
-#ifdef CONFIG_WFD
-#define ADD_LEN        124
-#else
-#define ADD_LEN        100
-#endif
-	if (wps_ie) {
-		if (wpabuf_resize(&wps_ie, ADD_LEN) == 0) {
-			wpas_p2p_scan_ie(wpa_s, wps_ie);
-			params->extra_ies = wpabuf_head(wps_ie);
-			params->extra_ies_len = wpabuf_len(wps_ie);
-		}
+	if (wps) {
+		size_t ielen = p2p_scan_ie_buf_len(wpa_s->global->p2p);
+		if (wpabuf_resize(&extra_ie, ielen) == 0)
+			wpas_p2p_scan_ie(wpa_s, extra_ie);
 	}
 #endif /* CONFIG_P2P */
 
 #endif /* CONFIG_WPS */
 
-	return wps_ie;
+	return extra_ie;
 }
+
 
 static void wpa_supplicant_scan(void *eloop_ctx, void *timeout_ctx)
 {
 	struct wpa_supplicant *wpa_s = eloop_ctx;
 	struct wpa_ssid *ssid;
 	int scan_req = 0, ret;
-	struct wpabuf *wps_ie = NULL;
+	struct wpabuf *extra_ie;
 	struct wpa_driver_scan_params params;
 	size_t max_ssids;
 	enum wpa_states prev_state;
@@ -419,8 +458,21 @@ static void wpa_supplicant_scan(void *eloop_ctx, void *timeout_ctx)
 		return;
 	}
 
-	if ((wpa_s->drv_flags & WPA_DRIVER_FLAGS_USER_SPACE_MLME) ||
-	    wpa_s->conf->ap_scan == 2)
+#ifdef CONFIG_P2P
+	if (wpas_p2p_in_progress(wpa_s)) {
+		if (wpa_s->wpa_state == WPA_SCANNING) {
+			wpa_dbg(wpa_s, MSG_DEBUG, "Delay station mode scan "
+				"while P2P operation is in progress");
+			wpa_supplicant_req_scan(wpa_s, 5, 0);
+		} else {
+			wpa_dbg(wpa_s, MSG_DEBUG, "Do not request scan while "
+				"P2P operation is in progress");
+		}
+		return;
+	}
+#endif /* CONFIG_P2P */
+
+	if (wpa_s->conf->ap_scan == 2)
 		max_ssids = 1;
 	else {
 		max_ssids = wpa_s->max_scan_ssids;
@@ -484,6 +536,8 @@ static void wpa_supplicant_scan(void *eloop_ctx, void *timeout_ctx)
 			ssid = wpa_s->conf->ssid;
 		while (ssid) {
 			if (!ssid->disabled && ssid->scan_ssid) {
+				wpa_hexdump_ascii(MSG_DEBUG, "Scan SSID",
+						  ssid->ssid, ssid->ssid_len);
 				params.ssids[params.num_ssids].ssid =
 					ssid->ssid;
 				params.ssids[params.num_ssids].ssid_len =
@@ -516,16 +570,17 @@ static void wpa_supplicant_scan(void *eloop_ctx, void *timeout_ctx)
 	}
 
 	if (ssid && max_ssids == 1) {
-		/* If the driver is limited to 1 ssid at a time
-		 * interleave wildcard SSID scans with specific SSID scans
-		 * to avoid waiting a long time for a wildcard scan.
+		/*
+		 * If the driver is limited to 1 SSID at a time interleave
+		 * wildcard SSID scans with specific SSID scans to avoid
+		 * waiting a long time for a wildcard scan.
 		 */
 		if (!wpa_s->prev_scan_wildcard) {
 			params.ssids[0].ssid = NULL;
 			params.ssids[0].ssid_len = 0;
 			wpa_s->prev_scan_wildcard = 1;
-			wpa_dbg(wpa_s, MSG_DEBUG, "Starting AP scan for wildcard "
-				"SSID (Interleave with specific)");
+			wpa_dbg(wpa_s, MSG_DEBUG, "Starting AP scan for "
+				"wildcard SSID (Interleave with specific)");
 		} else {
 			wpa_s->prev_scan_ssid = ssid;
 			wpa_s->prev_scan_wildcard = 0;
@@ -548,7 +603,7 @@ static void wpa_supplicant_scan(void *eloop_ctx, void *timeout_ctx)
 	}
 
 	wpa_supplicant_optimize_freqs(wpa_s, &params);
-	wps_ie = wpa_supplicant_extra_ies(wpa_s, &params);
+	extra_ie = wpa_supplicant_extra_ies(wpa_s, &params);
 
 	if (params.freqs == NULL && wpa_s->next_scan_freqs) {
 		wpa_dbg(wpa_s, MSG_DEBUG, "Optimize scan based on previously "
@@ -560,6 +615,10 @@ static void wpa_supplicant_scan(void *eloop_ctx, void *timeout_ctx)
 
 	params.filter_ssids = wpa_supplicant_build_filter_ssids(
 		wpa_s->conf, &params.num_filter_ssids);
+	if (extra_ie) {
+		params.extra_ies = wpabuf_head(extra_ie);
+		params.extra_ies_len = wpabuf_len(extra_ie);
+	}
 
 #ifdef CONFIG_P2P
 	if (wpa_s->p2p_in_provisioning) {
@@ -573,7 +632,7 @@ static void wpa_supplicant_scan(void *eloop_ctx, void *timeout_ctx)
 
 	ret = wpa_supplicant_trigger_scan(wpa_s, &params);
 
-	wpabuf_free(wps_ie);
+	wpabuf_free(extra_ie);
 	os_free(params.freqs);
 	os_free(params.filter_ssids);
 
@@ -625,6 +684,7 @@ void wpa_supplicant_req_scan(struct wpa_supplicant *wpa_s, int sec, int usec)
 	eloop_register_timeout(sec, usec, wpa_supplicant_scan, wpa_s, NULL);
 }
 
+
 /**
  * wpa_supplicant_delayed_sched_scan - Request a delayed scheduled scan
  * @wpa_s: Pointer to wpa_supplicant data
@@ -638,7 +698,7 @@ int wpa_supplicant_delayed_sched_scan(struct wpa_supplicant *wpa_s,
 				      int sec, int usec)
 {
 	if (!wpa_s->sched_scan_supported)
-		return -EOPNOTSUPP;
+		return -1;
 
 	eloop_register_timeout(sec, usec,
 			       wpa_supplicant_delayed_sched_scan_timeout,
@@ -646,6 +706,7 @@ int wpa_supplicant_delayed_sched_scan(struct wpa_supplicant *wpa_s,
 
 	return 0;
 }
+
 
 /**
  * wpa_supplicant_req_sched_scan - Start a periodic scheduled scan
@@ -660,10 +721,12 @@ int wpa_supplicant_req_sched_scan(struct wpa_supplicant *wpa_s)
 	struct wpa_ssid *ssid = NULL;
 	struct wpabuf *wps_ie = NULL;
 	int ret, prio;
-	int max_sched_scan_ssids;
+	unsigned int max_sched_scan_ssids;
+	int wildcard = 0;
+	int need_ssids;
 
 	if (!wpa_s->sched_scan_supported)
-		return -EOPNOTSUPP;
+		return -1;
 
 	if (wpas_wps_in_progress(wpa_s)) {
 		wpa_dbg(wpa_s, MSG_DEBUG,
@@ -691,52 +754,80 @@ int wpa_supplicant_req_sched_scan(struct wpa_supplicant *wpa_s)
 		max_sched_scan_ssids = WPAS_MAX_SCAN_SSIDS;
 	else
 		max_sched_scan_ssids = wpa_s->max_sched_scan_ssids;
+	if (max_sched_scan_ssids < 1)
+		return -1;
+	need_ssids = 0;
+	for (ssid = wpa_s->conf->ssid; ssid; ssid = ssid->next) {
+		if (!ssid->disabled && !ssid->scan_ssid) {
+			/* Use wildcard SSID to find this network */
+			wildcard = 1;
+		} else if (!ssid->disabled && ssid->ssid_len)
+			need_ssids++;
+	}
+	if (wildcard)
+		need_ssids++;
+
+	if (wpa_s->normal_scans < 3 &&
+	    (need_ssids <= wpa_s->max_scan_ssids ||
+	     wpa_s->max_scan_ssids >= (int) max_sched_scan_ssids)) {
+		/*
+		 * When normal scan can speed up operations, use that for the
+		 * first operations before starting the sched_scan to allow
+		 * user space sleep more. We do this only if the normal scan
+		 * has functionality that is suitable for this or if the
+		 * sched_scan does not have better support for multiple SSIDs.
+		 */
+		wpa_dbg(wpa_s, MSG_DEBUG, "Use normal scan instead of "
+			"sched_scan for initial scans (normal_scans=%d)",
+			wpa_s->normal_scans);
+		return -1;
+	}
 
 	os_memset(&params, 0, sizeof(params));
 
+	/* If we can't allocate space for the filters, we just don't filter */
 	params.filter_ssids = os_zalloc(wpa_s->max_match_sets *
 					sizeof(struct wpa_driver_scan_filter));
 
-	/* Don't sched scan if we can't filter because this will
-	 * wake up the host too frequently during suspend */
-	if (!params.filter_ssids)
-		return -ENOMEM;
+    /* Don't sched scan if we can't filter because this will
+     * wake up the host too frequently during suspend */
+    if (!params.filter_ssids)
+        return -ENOMEM;
 
 	for (prio = 0; prio < wpa_s->conf->num_prio; prio++) {
 		ssid = wpa_s->conf->pssid[prio];
-		while (ssid) {
-			if (ssid->disabled) {
-				ssid = ssid->pnext;
-				continue;
-			}
+        while (ssid) {
+            if (ssid->disabled) {
+                ssid = ssid->pnext;
+                continue;
+            }
 
-			if ((params.num_filter_ssids >= wpa_s->max_match_sets) ||
-			    (params.num_ssids >= max_sched_scan_ssids))
-				goto start_scan;
+            if ((params.num_filter_ssids >= wpa_s->max_match_sets) ||
+                (params.num_ssids >= max_sched_scan_ssids))
+                goto start_scan;
 
-			if (params.filter_ssids && ssid->ssid && ssid->ssid_len) {
-				wpa_dbg(wpa_s, MSG_DEBUG, "add to filter ssid: %s",
-					wpa_ssid_txt(ssid->ssid, ssid->ssid_len));
-				os_memcpy(params.filter_ssids[params.num_filter_ssids].ssid,
-					  ssid->ssid, ssid->ssid_len);
-				params.filter_ssids[params.num_filter_ssids].ssid_len =
-					ssid->ssid_len;
-				params.num_filter_ssids++;
-			}
+            if (params.filter_ssids && ssid->ssid && ssid->ssid_len) {
+                wpa_dbg(wpa_s, MSG_DEBUG, "add to filter ssid: %s",
+                        wpa_ssid_txt(ssid->ssid, ssid->ssid_len));
+                os_memcpy(params.filter_ssids[params.num_filter_ssids].ssid,
+                          ssid->ssid, ssid->ssid_len);
+                params.filter_ssids[params.num_filter_ssids].ssid_len =
+                    ssid->ssid_len;
+                params.num_filter_ssids++;
+            }
 
-			if (ssid->scan_ssid) {
-				wpa_dbg(wpa_s, MSG_DEBUG, "add to active scan ssid: %s",
-					wpa_ssid_txt(ssid->ssid, ssid->ssid_len));
-				params.ssids[params.num_ssids].ssid =
-					ssid->ssid;
-				params.ssids[params.num_ssids].ssid_len =
-					ssid->ssid_len;
-				params.num_ssids++;
-			}
-			ssid = ssid->pnext;
-
-		}
-	}
+            if (ssid->scan_ssid) {
+                wpa_dbg(wpa_s, MSG_DEBUG, "add to active scan ssid: %s",
+                        wpa_ssid_txt(ssid->ssid, ssid->ssid_len));
+                params.ssids[params.num_ssids].ssid =
+                    ssid->ssid;
+                params.ssids[params.num_ssids].ssid_len =
+                    ssid->ssid_len;
+                params.num_ssids++;
+            }
+            ssid = ssid->pnext;
+        }
+    }
 
 start_scan:
 	/* In case no SSIDs for active scan add wildcard SSID to trigger
@@ -774,8 +865,8 @@ start_scan:
 	if (ret) {
 		wpa_dbg(wpa_s, MSG_WARNING,
 			"Failed to start sched scan (%d)", ret);
-		return ret;
-	}
+        return ret;
+    }
 
 	if (prio < wpa_s->conf->num_prio) {
 		wpa_dbg(wpa_s, MSG_DEBUG,
@@ -958,15 +1049,28 @@ struct wpabuf * wpa_scan_get_vendor_ie_multi_beacon(
 }
 
 
+/*
+ * Channels with a great SNR can operate at full rate. What is a great SNR?
+ * This doc https://supportforums.cisco.com/docs/DOC-12954 says, "the general
+ * rule of thumb is that any SNR above 20 is good." This one
+ * http://www.cisco.com/en/US/tech/tk722/tk809/technologies_q_and_a_item09186a00805e9a96.shtml#qa23
+ * recommends 25 as a minimum SNR for 54 Mbps data rate. 30 is chosen here as a
+ * conservative value.
+ */
+#define GREAT_SNR 30
+
 /* Compare function for sorting scan results. Return >0 if @b is considered
  * better. */
 static int wpa_scan_result_compar(const void *a, const void *b)
 {
+#define IS_5GHZ(n) (n > 4000)
+#define MIN(a,b) a < b ? a : b
 	struct wpa_scan_res **_wa = (void *) a;
 	struct wpa_scan_res **_wb = (void *) b;
 	struct wpa_scan_res *wa = *_wa;
 	struct wpa_scan_res *wb = *_wb;
 	int wpa_a, wpa_b, maxrate_a, maxrate_b;
+	int snr_a, snr_b;
 
 	/* WPA/WPA2 support preferred */
 	wpa_a = wpa_scan_get_vendor_ie(wa, WPA_IE_VENDOR_TYPE) != NULL ||
@@ -987,23 +1091,37 @@ static int wpa_scan_result_compar(const void *a, const void *b)
 	    (wb->caps & IEEE80211_CAP_PRIVACY) == 0)
 		return -1;
 
-	/* best/max rate preferred if signal level close enough XXX */
-	if ((wa->level && wb->level && abs(wb->level - wa->level) < 5) ||
+	if ((wa->flags & wb->flags & WPA_SCAN_LEVEL_DBM) &&
+	    !((wa->flags | wb->flags) & WPA_SCAN_NOISE_INVALID)) {
+		snr_a = MIN(wa->level - wa->noise, GREAT_SNR);
+		snr_b = MIN(wb->level - wb->noise, GREAT_SNR);
+	} else {
+		/* Not suitable information to calculate SNR, so use level */
+		snr_a = wa->level;
+		snr_b = wb->level;
+	}
+
+	/* best/max rate preferred if SNR close enough */
+        if ((snr_a && snr_b && abs(snr_b - snr_a) < 5) ||
 	    (wa->qual && wb->qual && abs(wb->qual - wa->qual) < 10)) {
 		maxrate_a = wpa_scan_get_max_rate(wa);
 		maxrate_b = wpa_scan_get_max_rate(wb);
 		if (maxrate_a != maxrate_b)
 			return maxrate_b - maxrate_a;
+		if (IS_5GHZ(wa->freq) ^ IS_5GHZ(wb->freq))
+			return IS_5GHZ(wa->freq) ? -1 : 1;
 	}
 
 	/* use freq for channel preference */
 
-	/* all things being equal, use signal level; if signal levels are
+	/* all things being equal, use SNR; if SNRs are
 	 * identical, use quality values since some drivers may only report
 	 * that value and leave the signal level zero */
-	if (wb->level == wa->level)
+	if (snr_b == snr_a)
 		return wb->qual - wa->qual;
-	return wb->level - wa->level;
+	return snr_b - snr_a;
+#undef MIN
+#undef IS_5GHZ
 }
 
 
@@ -1055,6 +1173,37 @@ static int wpa_scan_result_wps_compar(const void *a, const void *b)
 #endif /* CONFIG_WPS */
 
 
+static void dump_scan_res(struct wpa_scan_results *scan_res)
+{
+#ifndef CONFIG_NO_STDOUT_DEBUG
+	size_t i;
+
+	if (scan_res->res == NULL || scan_res->num == 0)
+		return;
+
+	wpa_printf(MSG_EXCESSIVE, "Sorted scan results");
+
+	for (i = 0; i < scan_res->num; i++) {
+		struct wpa_scan_res *r = scan_res->res[i];
+		if ((r->flags & (WPA_SCAN_LEVEL_DBM | WPA_SCAN_NOISE_INVALID))
+		    == WPA_SCAN_LEVEL_DBM) {
+			int snr = r->level - r->noise;
+			wpa_printf(MSG_EXCESSIVE, MACSTR " freq=%d qual=%d "
+				   "noise=%d level=%d snr=%d%s flags=0x%x",
+				   MAC2STR(r->bssid), r->freq, r->qual,
+				   r->noise, r->level, snr,
+				   snr >= GREAT_SNR ? "*" : "", r->flags);
+		} else {
+			wpa_printf(MSG_EXCESSIVE, MACSTR " freq=%d qual=%d "
+				   "noise=%d level=%d flags=0x%x",
+				   MAC2STR(r->bssid), r->freq, r->qual,
+				   r->noise, r->level, r->flags);
+		}
+	}
+#endif /* CONFIG_NO_STDOUT_DEBUG */
+}
+
+
 /**
  * wpa_supplicant_get_scan_results - Get scan results
  * @wpa_s: Pointer to wpa_supplicant data
@@ -1074,10 +1223,7 @@ wpa_supplicant_get_scan_results(struct wpa_supplicant *wpa_s,
 	size_t i;
 	int (*compar)(const void *, const void *) = wpa_scan_result_compar;
 
-	if (wpa_s->drv_flags & WPA_DRIVER_FLAGS_USER_SPACE_MLME)
-		scan_res = ieee80211_sta_get_scan_results(wpa_s);
-	else
-		scan_res = wpa_drv_get_scan_results2(wpa_s);
+	scan_res = wpa_drv_get_scan_results2(wpa_s);
 	if (scan_res == NULL) {
 		wpa_dbg(wpa_s, MSG_DEBUG, "Failed to get scan results");
 		return NULL;
@@ -1093,6 +1239,7 @@ wpa_supplicant_get_scan_results(struct wpa_supplicant *wpa_s,
 
 	qsort(scan_res->res, scan_res->num, sizeof(struct wpa_scan_res *),
 	      compar);
+	dump_scan_res(scan_res);
 
 	wpa_bss_update_start(wpa_s);
 	for (i = 0; i < scan_res->num; i++)
@@ -1112,18 +1259,4 @@ int wpa_supplicant_update_scan_results(struct wpa_supplicant *wpa_s)
 	wpa_scan_results_free(scan_res);
 
 	return 0;
-}
-
-
-void wpa_scan_results_free(struct wpa_scan_results *res)
-{
-	size_t i;
-
-	if (res == NULL)
-		return;
-
-	for (i = 0; i < res->num; i++)
-		os_free(res->res[i]);
-	os_free(res->res);
-	os_free(res);
 }
