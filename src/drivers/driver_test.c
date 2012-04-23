@@ -2,14 +2,8 @@
  * Testing driver interface for a simulated network driver
  * Copyright (c) 2004-2010, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 /* Make sure we get winsock2.h for Windows build to get sockaddr_storage */
@@ -2918,7 +2912,7 @@ static int wpa_driver_test_p2p_set_params(void *priv,
 
 static int test_p2p_scan(void *ctx, enum p2p_scan_type type, int freq,
 			 unsigned int num_req_dev_types,
-			 const u8 *req_dev_types, const u8 *dev_id)
+			 const u8 *req_dev_types, const u8 *dev_id, u16 pw_id)
 {
 	struct wpa_driver_test_data *drv = ctx;
 	struct wpa_driver_scan_params params;
@@ -2939,8 +2933,8 @@ static int test_p2p_scan(void *ctx, enum p2p_scan_type type, int freq,
 
 #if 0 /* TODO: WPS IE */
 	wpa_s->wps->dev.p2p = 1;
-	wps_ie = wps_build_probe_req_ie(0, &wpa_s->wps->dev, wpa_s->wps->uuid,
-					WPS_REQ_ENROLLEE);
+	wps_ie = wps_build_probe_req_ie(pw_id, &wpa_s->wps->dev,
+					wpa_s->wps->uuid, WPS_REQ_ENROLLEE);
 #else
 	wps_ie = wpabuf_alloc(1);
 #endif

@@ -2,14 +2,8 @@
  * hostapd / EAP-SIM (RFC 4186)
  * Copyright (c) 2005-2008, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -137,8 +131,13 @@ static int eap_sim_build_encr(struct eap_sm *sm, struct eap_sim_data *data,
 			      const u8 *nonce_s)
 {
 	os_free(data->next_pseudonym);
-	data->next_pseudonym =
-		eap_sim_db_get_next_pseudonym(sm->eap_sim_db_priv, 0);
+	if (nonce_s == NULL) {
+		data->next_pseudonym =
+			eap_sim_db_get_next_pseudonym(sm->eap_sim_db_priv, 0);
+	} else {
+		/* Do not update pseudonym during re-authentication */
+		data->next_pseudonym = NULL;
+	}
 	os_free(data->next_reauth_id);
 	if (data->counter <= EAP_SIM_MAX_FAST_REAUTHS) {
 		data->next_reauth_id =
@@ -622,11 +621,6 @@ static void eap_sim_process_reauth(struct eap_sm *sm,
 		identity_len = id2_len;
 	}
 
-	if (data->next_pseudonym) {
-		eap_sim_db_add_pseudonym(sm->eap_sim_db_priv, identity,
-					 identity_len, data->next_pseudonym);
-		data->next_pseudonym = NULL;
-	}
 	if (data->next_reauth_id) {
 		eap_sim_db_add_reauth(sm->eap_sim_db_priv, identity,
 				      identity_len, data->next_reauth_id,

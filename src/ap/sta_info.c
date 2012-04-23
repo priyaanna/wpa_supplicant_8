@@ -2,14 +2,8 @@
  * hostapd / Station table
  * Copyright (c) 2002-2011, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "utils/includes.h"
@@ -34,6 +28,7 @@
 #include "vlan_init.h"
 #include "p2p_hostapd.h"
 #include "ap_drv_ops.h"
+#include "gas_serv.h"
 #include "sta_info.h"
 
 static void ap_sta_remove_in_other_bss(struct hostapd_data *hapd,
@@ -224,6 +219,15 @@ void ap_free_sta(struct hostapd_data *hapd, struct sta_info *sta)
 	p2p_group_notif_disassoc(hapd->p2p_group, sta->addr);
 #endif /* CONFIG_P2P */
 
+#ifdef CONFIG_INTERWORKING
+	if (sta->gas_dialog) {
+		int i;
+		for (i = 0; i < GAS_DIALOG_MAX; i++)
+			gas_serv_dialog_clear(&sta->gas_dialog[i]);
+		os_free(sta->gas_dialog);
+	}
+#endif /* CONFIG_INTERWORKING */
+
 	wpabuf_free(sta->wps_ie);
 	wpabuf_free(sta->p2p_ie);
 
@@ -403,8 +407,14 @@ static void ap_handle_session_timer(void *eloop_ctx, void *timeout_ctx)
 	struct sta_info *sta = timeout_ctx;
 	u8 addr[ETH_ALEN];
 
-	if (!(sta->flags & WLAN_STA_AUTH))
+	if (!(sta->flags & WLAN_STA_AUTH)) {
+		if (sta->flags & WLAN_STA_GAS) {
+			wpa_printf(MSG_DEBUG, "GAS: Remove temporary STA "
+				   "entry " MACSTR, MAC2STR(sta->addr));
+			ap_free_sta(hapd, sta);
+		}
 		return;
+	}
 
 	mlme_deauthenticate_indication(hapd, sta,
 				       WLAN_REASON_PREV_AUTH_NOT_VALID);

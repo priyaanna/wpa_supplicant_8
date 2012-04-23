@@ -2,14 +2,8 @@
  * wpa_supplicant - WPA2/RSN PMKSA cache functions
  * Copyright (c) 2003-2009, 2011-2012, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #ifndef PMKSA_CACHE_H
@@ -83,7 +77,8 @@ static inline void pmksa_cache_deinit(struct rsn_pmksa_cache *pmksa)
 }
 
 static inline struct rsn_pmksa_cache_entry *
-pmksa_cache_get(struct rsn_pmksa_cache *pmksa, const u8 *aa, const u8 *pmkid)
+pmksa_cache_get(struct rsn_pmksa_cache *pmksa, const u8 *aa, const u8 *pmkid,
+		const void *network_ctx)
 {
 	return NULL;
 }

@@ -2,14 +2,8 @@
  * hostapd / WPS integration
  * Copyright (c) 2008-2010, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "utils/includes.h"
@@ -189,19 +183,23 @@ static void hostapd_wps_pin_needed_cb(void *ctx, const u8 *uuid_e,
 struct wps_stop_reg_data {
 	struct hostapd_data *current_hapd;
 	const u8 *uuid_e;
+	const u8 *dev_pw;
+	size_t dev_pw_len;
 };
 
 static int wps_stop_registrar(struct hostapd_data *hapd, void *ctx)
 {
 	struct wps_stop_reg_data *data = ctx;
 	if (hapd != data->current_hapd && hapd->wps != NULL)
-		wps_registrar_complete(hapd->wps->registrar, data->uuid_e);
+		wps_registrar_complete(hapd->wps->registrar, data->uuid_e,
+				       data->dev_pw, data->dev_pw_len);
 	return 0;
 }
 
 
 static void hostapd_wps_reg_success_cb(void *ctx, const u8 *mac_addr,
-				       const u8 *uuid_e)
+				       const u8 *uuid_e, const u8 *dev_pw,
+				       size_t dev_pw_len)
 {
 	struct hostapd_data *hapd = ctx;
 	char uuid[40];
@@ -215,6 +213,8 @@ static void hostapd_wps_reg_success_cb(void *ctx, const u8 *mac_addr,
 					 mac_addr, uuid_e);
 	data.current_hapd = hapd;
 	data.uuid_e = uuid_e;
+	data.dev_pw = dev_pw;
+	data.dev_pw_len = dev_pw_len;
 	hostapd_wps_for_each(hapd, wps_stop_registrar, &data);
 }
 

@@ -2,14 +2,8 @@
  * WPA Supplicant - background scan and roaming module: learn
  * Copyright (c) 2009-2010, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -290,21 +284,33 @@ static void bgscan_learn_timeout(void *eloop_ctx, void *timeout_ctx)
 		freqs = bgscan_learn_get_freqs(data, &count);
 		wpa_printf(MSG_DEBUG, "bgscan learn: BSSes in this ESS have "
 			   "been seen on %u channels", (unsigned int) count);
-		freqs = bgscan_learn_get_probe_freq(data, freqs, count);
 
-		msg[0] = '\0';
-		pos = msg;
-		for (i = 0; freqs && freqs[i]; i++) {
-			int ret;
-			ret = os_snprintf(pos, msg + sizeof(msg) - pos, " %d",
-					  freqs[i]);
-			if (ret < 0 || ret >= msg + sizeof(msg) - pos)
-				break;
-			pos += ret;
+		if (data->scan_interval == data->short_interval && count < 2) {
+			os_free(freqs);
+			freqs = NULL;
+			wpa_printf(MSG_DEBUG,
+				   "bgscan_learn: Scanning all frequencies");
+		} else {
+			freqs = bgscan_learn_get_probe_freq(data, freqs, count);
+
+			msg[0] = '\0';
+			pos = msg;
+			for (i = 0; freqs && freqs[i]; i++) {
+				int ret;
+				ret = os_snprintf(pos, msg + sizeof(msg) - pos,
+						  " %d", freqs[i]);
+				if (ret < 0 ||
+				    ret >= msg + sizeof(msg) - pos)
+					break;
+				pos += ret;
+			}
+			pos[0] = '\0';
+
+			wpa_printf(MSG_DEBUG, "bgscan learn: "
+				   "Scanning frequencies:%s",
+				   msg);
 		}
-		pos[0] = '\0';
-		wpa_printf(MSG_DEBUG, "bgscan learn: Scanning frequencies:%s",
-			   msg);
+
 		params.freqs = freqs;
 	}
 
@@ -420,8 +426,16 @@ static void * bgscan_learn_init(struct wpa_supplicant *wpa_s,
 			   "signal strength monitoring");
 	}
 
-	data->supp_freqs = bgscan_learn_get_supp_freqs(wpa_s);
 	data->scan_interval = data->short_interval;
+	if (data->signal_threshold) {
+		/* Poll for signal info to set initial scan interval */
+		struct wpa_signal_info siginfo;
+		if (wpa_drv_signal_poll(wpa_s, &siginfo) == 0 &&
+		    siginfo.current_signal >= data->signal_threshold)
+			data->scan_interval = data->long_interval;
+	}
+
+	data->supp_freqs = bgscan_learn_get_supp_freqs(wpa_s);
 	eloop_register_timeout(data->scan_interval, 0, bgscan_learn_timeout,
 			       data, NULL);
 
@@ -547,7 +561,14 @@ static int bgscan_learn_notify_scan(void *priv,
 static void bgscan_learn_notify_beacon_loss(void *priv)
 {
 	wpa_printf(MSG_DEBUG, "bgscan learn: beacon loss");
-	/* TODO: speed up background scanning */
+	struct bgscan_learn_data *data = priv;
+
+	data->scan_interval = data->short_interval;
+
+	wpa_printf(MSG_DEBUG, "bgscan learn: Trigger immediate scan");
+	eloop_cancel_timeout(bgscan_learn_timeout, data, NULL);
+	eloop_register_timeout(0, 0, bgscan_learn_timeout, data,
+			       NULL);
 }
 
 

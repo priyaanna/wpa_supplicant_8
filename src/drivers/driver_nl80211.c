@@ -6,14 +6,8 @@
  * Copyright (c) 2007, Johannes Berg <johannes@sipsolutions.net>
  * Copyright (c) 2009-2010, Atheros Communications
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -801,10 +795,28 @@ static void wpa_driver_nl80211_event_link(struct wpa_driver_nl80211_data *drv,
 		   del ? "removed" : "added");
 
 	if (os_strcmp(drv->first_bss.ifname, event.interface_status.ifname) == 0) {
-		if (del)
+		if (del) {
+			if (drv->if_removed) {
+				wpa_printf(MSG_DEBUG, "nl80211: if_removed "
+					   "already set - ignore event");
+				return;
+			}
 			drv->if_removed = 1;
-		else
+		} else {
+			if (if_nametoindex(drv->first_bss.ifname) == 0) {
+				wpa_printf(MSG_DEBUG, "nl80211: Interface %s "
+					   "does not exist - ignore "
+					   "RTM_NEWLINK",
+					   drv->first_bss.ifname);
+				return;
+			}
+			if (!drv->if_removed) {
+				wpa_printf(MSG_DEBUG, "nl80211: if_removed "
+					   "already cleared - ignore event");
+				return;
+			}
 			drv->if_removed = 0;
+		}
 	}
 
 	wpa_supplicant_event(drv->ctx, EVENT_INTERFACE_STATUS, &event);
@@ -921,6 +933,14 @@ static void wpa_driver_nl80211_event_rtm_newlink(void *ctx,
 			wpa_printf(MSG_DEBUG, "nl80211: Ignore interface up "
 				   "event since interface %s is down",
 				   namebuf);
+		} else if (if_nametoindex(drv->first_bss.ifname) == 0) {
+			wpa_printf(MSG_DEBUG, "nl80211: Ignore interface up "
+				   "event since interface %s does not exist",
+				   drv->first_bss.ifname);
+		} else if (drv->if_removed) {
+			wpa_printf(MSG_DEBUG, "nl80211: Ignore interface up "
+				   "event since interface %s is marked "
+				   "removed", drv->first_bss.ifname);
 		} else {
 			wpa_printf(MSG_DEBUG, "nl80211: Interface up");
 			drv->if_disabled = 0;
@@ -1192,31 +1212,13 @@ static void mlme_event_disconnect(struct wpa_driver_nl80211_data *drv,
 		 */
 		wpa_printf(MSG_DEBUG, "nl80211: Ignore disconnect "
 			   "event when using userspace SME");
-#ifndef ANDROID_BRCM_P2P_PATCH
 		return;
-#endif /* ANDROID_BRCM_P2P_PATCH */
 	}
 
 	drv->associated = 0;
 	os_memset(&data, 0, sizeof(data));
-	if (reason) {
+	if (reason)
 		data.disassoc_info.reason_code = nla_get_u16(reason);
-#ifdef ANDROID_BRCM_P2P_PATCH
-		/*
-		 * The driver uses one of the reason codes to indicate that the
-		 * firmware has crashed. This event trigger reloading of the
-		 * driver to recover.
-		 *
-		 * FIX: This is pretty bad misuse of the nl80211 events and
-		 * must be fixed - any AP could send a Disassociation frame
-		 * with reason code "unspecified" and that would trigger this
-		 * reloading unnecessarily..
-		 */
-		if (data.disassoc_info.reason_code == WLAN_REASON_UNSPECIFIED)
-			wpa_msg(drv->ctx, MSG_INFO,
-				WPA_EVENT_DRIVER_STATE "HANGED");
-#endif /* ANDROID_BRCM_P2P_PATCH */
-	}
 	data.disassoc_info.locally_generated = by_ap == NULL;
 	wpa_supplicant_event(drv->ctx, EVENT_DISASSOC, &data);
 }
@@ -1898,6 +1900,10 @@ static void nl80211_cqm_event(struct wpa_driver_nl80211_data *drv,
 		wpa_printf(MSG_DEBUG, "nl80211: Connection quality monitor "
 			   "event: RSSI low");
 		ed.signal_change.above_threshold = 0;
+	} else if (event == NL80211_CQM_RSSI_BEACON_LOSS) {
+		wpa_printf(MSG_DEBUG, "nl80211: Connection quality monitor "
+			   "event: beacon loss!");
+		wpa_supplicant_event(drv->ctx, EVENT_START_ROAMING, &ed);
 	} else
 		return;
 
@@ -3548,6 +3554,8 @@ static int wpa_driver_nl80211_scan(void *priv,
 	}
 
 	if (params->p2p_probe) {
+		wpa_printf(MSG_DEBUG, "nl80211: P2P probe - mask SuppRates");
+
 		/*
 		 * Remove 2.4 GHz rates 1, 2, 5.5, 11 Mbps from supported rates
 		 * by masking out everything else apart from the OFDM rates 6,
@@ -6559,6 +6567,14 @@ retry:
 		NLA_PUT(msg, NL80211_ATTR_MAC, ETH_ALEN, params->bssid);
 	}
 
+	if (params->key_mgmt_suite == KEY_MGMT_802_1X ||
+	    params->key_mgmt_suite == KEY_MGMT_PSK ||
+	    params->key_mgmt_suite == KEY_MGMT_802_1X_SHA256 ||
+	    params->key_mgmt_suite == KEY_MGMT_PSK_SHA256) {
+		wpa_printf(MSG_DEBUG, "  * control port");
+		NLA_PUT_FLAG(msg, NL80211_ATTR_CONTROL_PORT);
+	}
+
 	if (params->wpa_ie) {
 		wpa_hexdump(MSG_DEBUG,
 			    "  * Extra IEs for Beacon/Probe Response frames",
@@ -8258,13 +8274,6 @@ static int wpa_driver_nl80211_probe_req_report(void *priv, int report)
 	struct i802_bss *bss = priv;
 	struct wpa_driver_nl80211_data *drv = bss->drv;
 
-	if (drv->nlmode != NL80211_IFTYPE_STATION) {
-		wpa_printf(MSG_DEBUG, "nl80211: probe_req_report control only "
-			   "allowed in station mode (iftype=%d)",
-			   drv->nlmode);
-		return -1;
-	}
-
 	if (!report) {
 		if (bss->nl_preq && drv->device_ap_sme &&
 		    is_ap_interface(drv->nlmode)) {
@@ -8404,6 +8413,14 @@ static int wpa_driver_nl80211_deinit_ap(void *priv)
 	return wpa_driver_nl80211_set_mode(priv, NL80211_IFTYPE_STATION);
 }
 
+static int wpa_driver_nl80211_deinit_p2p_cli(void *priv)
+{
+	struct i802_bss *bss = priv;
+	struct wpa_driver_nl80211_data *drv = bss->drv;
+	if (drv->nlmode != NL80211_IFTYPE_P2P_CLIENT)
+		return -1;
+	return wpa_driver_nl80211_set_mode(priv, NL80211_IFTYPE_STATION);
+}
 
 static void wpa_driver_nl80211_resume(void *priv)
 {
@@ -8753,6 +8770,7 @@ nl80211_self_filter_get_pattern_handler(u8 *buf, int buflen, void *arg)
 }
 
 static struct rx_filter rx_filters[] = {
+	/* ID 0 */
 	{.name = "self",
 	 .pattern = {},
 	 .pattern_len = 6,
@@ -8761,6 +8779,7 @@ static struct rx_filter rx_filters[] = {
 	 .get_pattern_handler = nl80211_self_filter_get_pattern_handler,
 	},
 
+	/* ID 1 */
 	{.name = "bcast",
 	 .pattern = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF},
 	 .pattern_len = 6,
@@ -8768,6 +8787,7 @@ static struct rx_filter rx_filters[] = {
 	 .mask_len = 1,
 	},
 
+	/* ID 2 */
 	{.name = "ipv4mc",
 	 .pattern = {0x01,0x00,0x5E},
 	 .pattern_len = 3,
@@ -8775,6 +8795,7 @@ static struct rx_filter rx_filters[] = {
 	 .mask_len = 1,
 	},
 
+	/* ID 3 */
 	{.name = "ipv6mc",
 	 .pattern = {0x33,0x33},
 	 .pattern_len = 2,
@@ -8782,18 +8803,45 @@ static struct rx_filter rx_filters[] = {
 	 .mask_len = 1,
 	},
 
+	/* ID 4 */
 	{.name = "dhcp",
-	 .pattern = {0   , 0   , 0   , 0   , 0   , 0   , 0   , 0   ,
+	 .pattern = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0   , 0   ,
 		     0   , 0   , 0   , 0   , 0   , 0   , 0x45, 0   ,
 		     0   , 0   , 0   , 0   , 0   , 0   , 0   , 0x11,
 		     0   , 0   , 0   , 0   , 0   , 0   , 0   , 0   ,
 		     0   , 0   , 0   , 0   , 0x00, 0x44},
 	 .pattern_len = 38,
-	 .mask = { 0,                                 /* OCTET 1 */
-		   BIT(6),                            /* OCTET 2 */
-		   BIT(7),                            /* OCTET 3 */
-		   0,                                 /* OCTET 4 */
-		   BIT(4) | BIT(5) },                 /* OCTET 5 */
+	 .mask = { BIT(0) | BIT(1) | BIT(2) | BIT(3) | BIT(4) | BIT(5),
+		   BIT(6),                               /* OCTET 2 */
+		   BIT(7),                               /* OCTET 3 */
+		   0,                                    /* OCTET 4 */
+		   BIT(4) | BIT(5) },                    /* OCTET 5 */
+	 .mask_len = 5,
+	},
+
+	/* ID 5 */
+	{.name = "arp",
+	 .pattern = {0   , 0   , 0   , 0   , 0   , 0   , 0   , 0   ,
+		     0   , 0   , 0   , 0   , 0x08, 0x06},
+	 .pattern_len = 14,
+	 .mask = { 0,                                    /* OCTET 1 */
+		   BIT(4) | BIT(5) },                    /* OCTET 2 */
+	 .mask_len = 2,
+	},
+
+	/* ID 6 */
+	{.name = "ssdp",
+	 .pattern = {0x01, 0x00, 0x5E, 0   , 0   , 0   , 0   , 0   ,
+		     0   , 0   , 0   , 0   , 0   , 0   , 0x45, 0   ,
+		     0   , 0   , 0   , 0   , 0   , 0   , 0   , 0x11,
+		     0   , 0   , 0   , 0   , 0   , 0   , 0xEF, 0xFF,
+		     0xFF, 0xFA, 0   , 0   , 0x07, 0x6C},
+	 .pattern_len = 38,
+	 .mask = { BIT(0) | BIT(1) | BIT(2),             /* OCTET 1 */
+		   BIT(6),                               /* OCTET 2 */
+		   BIT(7),                               /* OCTET 3 */
+		   BIT(6) | BIT(7),                      /* OCTET 4 */
+		   BIT(0) | BIT(1) | BIT(4) | BIT(5) },  /* OCTET 5 */
 	 .mask_len = 5,
 	},
 };
@@ -8833,10 +8881,13 @@ static int nl80211_set_wowlan_triggers(struct i802_bss *bss, int enable)
 			goto nla_put_failure;
 		}
 
-		/* In ginger filter 0 and 1 are always set but in ICS they
-		   were completely removed. Make sure to always set them
-		   otherwise unicast and bcast are dropped */
-		filters = bss->drv->wowlan_triggers |= 3;
+		/*
+		 * In GB filters 0 and 1 are always set but in ICS they
+		 * were completely removed. Add filter 0 (unicast) by default
+		 * so unicast traffic won't be dropped in any case.
+		 */
+
+		filters = bss->drv->wowlan_triggers |= 1;
 
 		for (i = 0; i < NR_RX_FILTERS; i++) {
 			struct rx_filter *rx_filter = &rx_filters[i];
@@ -8912,6 +8963,62 @@ static int nl80211_parse_wowlan_trigger_nr(char *s)
 	if(endp == s)
 		return -1;
 	return i;
+}
+
+static int nl80211_toggle_dropbcast(int enable)
+{
+	char filename[90];
+	int rv;
+	FILE *f;
+
+	snprintf(filename, sizeof(filename) - 1,
+		 "/sys/bus/platform/devices/wl12xx/drop_bcast");
+	f = fopen(filename, "w");
+	if (!f) {
+		wpa_printf(MSG_DEBUG, "Could not open file %s: %s",
+			   filename, strerror(errno));
+		return -1;
+	}
+
+	rv = fprintf(f, "%d", enable);
+	fclose(f);
+	if (rv < 1) {
+		wpa_printf(MSG_DEBUG, "Could not write to file %s: %s",
+			   filename, strerror(errno));
+		return -1;
+	}
+
+	return 0;
+}
+
+static int nl80211_dropbcast_get(char *buf, size_t buf_len)
+{
+	char filename[90], value[10], *pos;
+	int f, rv;
+
+	snprintf(filename, sizeof(filename) - 1,
+		 "/sys/bus/platform/devices/wl12xx/drop_bcast");
+	f = open(filename, O_RDONLY);
+	if (f < 0) {
+		wpa_printf(MSG_DEBUG, "Could not open file %s: %s",
+			   filename, strerror(errno));
+		return -1;
+	}
+
+	rv = read(f, value, sizeof(value) - 1);
+	close(f);
+	if (rv < 0) {
+		wpa_printf(MSG_DEBUG, "Could not read file %s: %s",
+			   filename, strerror(errno));
+		return -1;
+	}
+
+	value[rv] = '\0';
+	pos = os_strchr(value, '\n');
+	if (pos)
+		*pos = '\0';
+
+	return snprintf(buf, buf_len, "Drop bcast = %s\n", value);
 }
 
 #endif /* ANDROID */
@@ -9416,10 +9523,28 @@ static int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf,
 		if(i < 0)
 			return i;
 		return nl80211_toggle_wowlan_trigger(bss, i, 0);
-	} else if( os_strcasecmp(cmd, "RXFILTER-START") == 0 ) {
+	} else if (os_strcasecmp(cmd, "RXFILTER-START") == 0) {
 		return nl80211_set_wowlan_triggers(bss, 1);
-	} else if( os_strcasecmp(cmd, "RXFILTER-STOP") == 0 ) {
+	} else if (os_strcasecmp(cmd, "RXFILTER-STOP") == 0) {
 		return nl80211_set_wowlan_triggers(bss, 0);
+	} else if (os_strncasecmp(cmd, "DROPBCAST", 9) == 0) {
+		char *value = cmd + 10;
+
+		if (!os_strcasecmp(value, "ENABLE") ||
+		    !os_strcasecmp(value, "1")) {
+			ret = nl80211_toggle_dropbcast(1);
+		} else if (!os_strcasecmp(value, "DISABLE") ||
+			   !os_strcasecmp(value, "0")) {
+			ret = nl80211_toggle_dropbcast(0);
+		} else if (!os_strcasecmp(value, "GET") ||
+			   !os_strlen(value)) {
+			ret = nl80211_dropbcast_get(buf, buf_len);
+		} else {
+			wpa_printf(MSG_ERROR,
+				   "Invalid parameter for DROPBCAST: %s",
+				   value);
+			ret = -1;
+		}
 	} else if( os_strcasecmp(cmd, "LINKSPEED") == 0 ) {
 		struct wpa_signal_info sig;
 		int linkspeed;
@@ -9596,6 +9721,7 @@ const struct wpa_driver_ops wpa_driver_nl80211_ops = {
 	wpa_driver_nl80211_cancel_remain_on_channel,
 	.probe_req_report = wpa_driver_nl80211_probe_req_report,
 	.deinit_ap = wpa_driver_nl80211_deinit_ap,
+	.deinit_p2p_cli = wpa_driver_nl80211_deinit_p2p_cli,
 	.resume = wpa_driver_nl80211_resume,
 	.send_ft_action = nl80211_send_ft_action,
 	.signal_monitor = nl80211_signal_monitor,

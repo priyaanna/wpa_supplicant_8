@@ -1,15 +1,9 @@
 /*
  * WPA Supplicant / Configuration file structures
- * Copyright (c) 2003-2005, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2003-2012, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #ifndef CONFIG_H
@@ -29,12 +23,137 @@
 #define DEFAULT_BSS_EXPIRATION_SCAN_COUNT 2
 #define DEFAULT_MAX_NUM_STA 128
 #define DEFAULT_ACCESS_NETWORK_TYPE 15
+#define MAX_SCHED_SCAN_INTERVAL 3600
+#define MAX_NUM_SCHED_SCAN_SHORT_INTERVALS 14
 #define DEFAULT_SCHED_SCAN_SHORT_INTERVAL 10
 #define DEFAULT_SCHED_SCAN_LONG_INTERVAL 30
 #define DEFAULT_SCHED_SCAN_NUM_SHORT_INTERVALS 6
 
 #include "config_ssid.h"
 #include "wps/wps.h"
+
+
+struct wpa_cred {
+	/**
+	 * next - Next credential in the list
+	 *
+	 * This pointer can be used to iterate over all credentials. The head
+	 * of this list is stored in the cred field of struct wpa_config.
+	 */
+	struct wpa_cred *next;
+
+	/**
+	 * id - Unique id for the credential
+	 *
+	 * This identifier is used as a unique identifier for each credential
+	 * block when using the control interface. Each credential is allocated
+	 * an id when it is being created, either when reading the
+	 * configuration file or when a new credential is added through the
+	 * control interface.
+	 */
+	int id;
+
+	/**
+	 * priority - Priority group
+	 *
+	 * By default, all networks and credentials get the same priority group
+	 * (0). This field can be used to give higher priority for credentials
+	 * (and similarly in struct wpa_ssid for network blocks) to change the
+	 * Interworking automatic networking selection behavior. The matching
+	 * network (based on either an enabled network block or a credential)
+	 * with the highest priority value will be selected.
+	 */
+	int priority;
+
+	/**
+	 * pcsc - Use PC/SC and SIM/USIM card
+	 */
+	int pcsc;
+
+	/**
+	 * realm - Home Realm for Interworking
+	 */
+	char *realm;
+
+	/**
+	 * username - Username for Interworking network selection
+	 */
+	char *username;
+
+	/**
+	 * password - Password for Interworking network selection
+	 */
+	char *password;
+
+	/**
+	 * ca_cert - CA certificate for Interworking network selection
+	 */
+	char *ca_cert;
+
+	/**
+	 * client_cert - File path to client certificate file (PEM/DER)
+	 *
+	 * This field is used with Interworking networking selection for a case
+	 * where client certificate/private key is used for authentication
+	 * (EAP-TLS). Full path to the file should be used since working
+	 * directory may change when wpa_supplicant is run in the background.
+	 *
+	 * Alternatively, a named configuration blob can be used by setting
+	 * this to blob://blob_name.
+	 */
+	char *client_cert;
+
+	/**
+	 * private_key - File path to client private key file (PEM/DER/PFX)
+	 *
+	 * When PKCS#12/PFX file (.p12/.pfx) is used, client_cert should be
+	 * commented out. Both the private key and certificate will be read
+	 * from the PKCS#12 file in this case. Full path to the file should be
+	 * used since working directory may change when wpa_supplicant is run
+	 * in the background.
+	 *
+	 * Windows certificate store can be used by leaving client_cert out and
+	 * configuring private_key in one of the following formats:
+	 *
+	 * cert://substring_to_match
+	 *
+	 * hash://certificate_thumbprint_in_hex
+	 *
+	 * For example: private_key="hash://63093aa9c47f56ae88334c7b65a4"
+	 *
+	 * Note that when running wpa_supplicant as an application, the user
+	 * certificate store (My user account) is used, whereas computer store
+	 * (Computer account) is used when running wpasvc as a service.
+	 *
+	 * Alternatively, a named configuration blob can be used by setting
+	 * this to blob://blob_name.
+	 */
+	char *private_key;
+
+	/**
+	 * private_key_passwd - Password for private key file
+	 */
+	char *private_key_passwd;
+
+	/**
+	 * imsi - IMSI in <MCC> | <MNC> | '-' | <MSIN> format
+	 */
+	char *imsi;
+
+	/**
+	 * milenage - Milenage parameters for SIM/USIM simulator in
+	 *	<Ki>:<OPc>:<SQN> format
+	 */
+	char *milenage;
+
+	/**
+	 * domain - Home service provider FQDN
+	 *
+	 * This is used to compare against the Domain Name List to figure out
+	 * whether the AP is operated by the Home SP.
+	 */
+	char *domain;
+};
 
 
 #define CFG_CHANGED_DEVICE_NAME BIT(0)
@@ -79,6 +198,13 @@ struct wpa_config {
 	 * pssid.
 	 */
 	int num_prio;
+
+	/**
+	 * cred - Head of the credential list
+	 *
+	 * This is the head for the list of all the configured credentials.
+	 */
+	struct wpa_cred *cred;
 
 	/**
 	 * eapol_version - IEEE 802.1X/EAPOL version number
@@ -218,6 +344,23 @@ struct wpa_config {
 	 * module is not loaded.
 	 */
 	char *pkcs11_module_path;
+
+	/**
+	 * pcsc_reader - PC/SC reader name prefix
+	 *
+	 * If not %NULL, PC/SC reader with a name that matches this prefix is
+	 * initialized for SIM/USIM access. Empty string can be used to match
+	 * the first available reader.
+	 */
+	char *pcsc_reader;
+
+	/**
+	 * pcsc_pin - PIN for USIM, GSM SIM, and smartcards
+	 *
+	 * This field is used to configure PIN for SIM/USIM for EAP-SIM and
+	 * EAP-AKA. If left out, this will be asked through control interface.
+	 */
+	char *pcsc_pin;
 
 	/**
 	 * driver_param - Driver interface parameters
@@ -458,37 +601,6 @@ struct wpa_config {
 	u8 hessid[ETH_ALEN];
 
 	/**
-	 * home_realm - Home Realm for Interworking
-	 */
-	char *home_realm;
-
-	/**
-	 * home_username - Username for Interworking network selection
-	 */
-	char *home_username;
-
-	/**
-	 * home_password - Password for Interworking network selection
-	 */
-	char *home_password;
-
-	/**
-	 * home_ca_cert - CA certificate for Interworking network selection
-	 */
-	char *home_ca_cert;
-
-	/**
-	 * home_imsi - IMSI in <MCC> | <MNC> | '-' | <MSIN> format
-	 */
-	char *home_imsi;
-
-	/**
-	 * home_milenage - Milenage parameters for SIM/USIM simulator in
-	 *	<Ki>:<OPc>:<SQN> format
-	 */
-	char *home_milenage;
-
-	/**
 	 * sched_scan_short_interval - Initial interval for sched scan in secs
 	 *
 	 * sched scan will start with this interval for num_short_intervals
@@ -537,6 +649,13 @@ void wpa_config_set_blob(struct wpa_config *config,
 			 struct wpa_config_blob *blob);
 void wpa_config_free_blob(struct wpa_config_blob *blob);
 int wpa_config_remove_blob(struct wpa_config *config, const char *name);
+
+struct wpa_cred * wpa_config_get_cred(struct wpa_config *config, int id);
+struct wpa_cred * wpa_config_add_cred(struct wpa_config *config);
+int wpa_config_remove_cred(struct wpa_config *config, int id);
+void wpa_config_free_cred(struct wpa_cred *cred);
+int wpa_config_set_cred(struct wpa_cred *cred, const char *var,
+			const char *value, int line);
 
 struct wpa_config * wpa_config_alloc_empty(const char *ctrl_interface,
 					   const char *driver_param);

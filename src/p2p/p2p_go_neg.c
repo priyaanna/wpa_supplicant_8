@@ -2,14 +2,8 @@
  * Wi-Fi Direct - P2P Group Owner Negotiation
  * Copyright (c) 2009-2010, Atheros Communications
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -104,7 +98,7 @@ static int p2p_peer_channels(struct p2p_data *p2p, struct p2p_device *dev,
 }
 
 
-static u16 p2p_wps_method_pw_id(enum p2p_wps_method wps_method)
+u16 p2p_wps_method_pw_id(enum p2p_wps_method wps_method)
 {
 	switch (wps_method) {
 	case WPS_PIN_DISPLAY:
@@ -498,6 +492,14 @@ void p2p_process_go_neg_req(struct p2p_data *p2p, const u8 *sa,
 			wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG,
 				"P2P: Do not reply since peer has higher "
 				"address and GO Neg Request already sent");
+			p2p_parse_free(&msg);
+			return;
+		}
+
+		if (dev->dialog_token == msg.dialog_token) {
+			wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG,
+				"P2P: Do not reply since dialog token %d "
+				"was already used", msg.dialog_token);
 			p2p_parse_free(&msg);
 			return;
 		}

@@ -2,14 +2,8 @@
  * Wi-Fi Protected Setup
  * Copyright (c) 2007-2009, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -437,7 +431,8 @@ struct wpabuf * wps_build_assoc_resp_ie(void)
 
 /**
  * wps_build_probe_req_ie - Build WPS IE for Probe Request
- * @pbc: Whether searching for PBC mode APs
+ * @pw_id: Password ID (DEV_PW_PUSHBUTTON for active PBC and DEV_PW_DEFAULT for
+ * most other use cases)
  * @dev: Device attributes
  * @uuid: Own UUID
  * @req_type: Value for Request Type attribute
@@ -448,7 +443,7 @@ struct wpabuf * wps_build_assoc_resp_ie(void)
  *
  * The caller is responsible for freeing the buffer.
  */
-struct wpabuf * wps_build_probe_req_ie(int pbc, struct wps_device_data *dev,
+struct wpabuf * wps_build_probe_req_ie(u16 pw_id, struct wps_device_data *dev,
 				       const u8 *uuid,
 				       enum wps_request_type req_type,
 				       unsigned int num_req_dev_types,
@@ -470,8 +465,7 @@ struct wpabuf * wps_build_probe_req_ie(int pbc, struct wps_device_data *dev,
 	    wps_build_rf_bands(dev, ie) ||
 	    wps_build_assoc_state(NULL, ie) ||
 	    wps_build_config_error(ie, WPS_CFG_NO_ERROR) ||
-	    wps_build_dev_password_id(ie, pbc ? DEV_PW_PUSHBUTTON :
-				      DEV_PW_DEFAULT) ||
+	    wps_build_dev_password_id(ie, pw_id) ||
 #ifdef CONFIG_WPS2
 	    wps_build_manufacturer(dev, ie) ||
 	    wps_build_model_name(dev, ie) ||

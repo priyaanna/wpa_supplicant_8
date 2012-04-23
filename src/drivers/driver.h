@@ -2,14 +2,8 @@
  * Driver interface definition
  * Copyright (c) 2003-2012, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  *
  * This file defines a driver interface used by both %wpa_supplicant and
  * hostapd. The first part of the file defines data structures used in various
@@ -2044,6 +2038,17 @@ struct wpa_driver_ops {
 	int (*deinit_ap)(void *priv);
 
 	/**
+	 * deinit_ap - Deinitialize P2P_CLI mode
+	 * @priv: Private driver interface data
+	 * Returns: 0 on success, -1 on failure (or if not supported)
+	 *
+	 * This optional function can be used to disable P2P_CLI mode.
+	 * usually, it will most be used to change vif type back to
+	 * station mode.
+	 */
+	int (*deinit_p2p_cli)(void *priv);
+
+	/**
 	 * suspend - Notification on system suspend/hibernate event
 	 * @priv: Private driver interface data
 	 */
@@ -2511,6 +2516,18 @@ struct wpa_driver_ops {
 			    const u8 *addr, int qos);
 
 	/**
+	 * radio_disable - Disable/enable radio
+	 * @priv: Private driver interface data
+	 * @disabled: 1=disable 0=enable radio
+	 * Returns: 0 on success, -1 on failure
+	 *
+	 * This optional command is for testing purposes. It can be used to
+	 * disable the radio on a testbed device to simulate out-of-radio-range
+	 * conditions.
+	 */
+	int (*radio_disable)(void *priv, int disabled);
+
+	/**
 	 * driver_cmd - execute driver-specific command
 	 * @priv: private driver interface data
 	 * @cmd: command to execute
@@ -2826,6 +2843,7 @@ enum wpa_event_type {
 	 */
 	EVENT_ROAMING_DISABLED,
 
+	EVENT_START_ROAMING,
 	/**
 	 * EVENT_INTERFACE_ENABLED - Notify that interface was enabled
 	 *

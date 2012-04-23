@@ -2,14 +2,8 @@
  * wpa_supplicant - Internal definitions
  * Copyright (c) 2003-2010, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #ifndef WPA_SUPPLICANT_I_H
@@ -205,6 +199,12 @@ struct p2p_srv_upnp {
 	char *service;
 };
 
+struct wpa_freq_range {
+	unsigned int min;
+	unsigned int max;
+};
+
+
 /**
  * struct wpa_global - Internal, global data for all %wpa_supplicant interfaces
  *
@@ -226,6 +226,8 @@ struct wpa_global {
 	struct dl_list p2p_srv_upnp; /* struct p2p_srv_upnp */
 	int p2p_disabled;
 	int cross_connection;
+	struct wpa_freq_range *p2p_disallow_freq;
+	unsigned int num_p2p_disallow_freq;
 };
 
 
@@ -268,7 +270,13 @@ struct wpa_supplicant {
 	u8 bssid[ETH_ALEN];
 	u8 pending_bssid[ETH_ALEN]; /* If wpa_state == WPA_ASSOCIATING, this
 				     * field contains the target BSSID. */
-	int reassociate; /* reassociation requested */
+	int roaming_in_progress;
+	int ignore_deauth_event;
+	u8 prev_bssid[ETH_ALEN];     /* BSSID being roamed from */
+	struct wpa_ssid *prev_ssid;  /* SSID being roamed from */
+
+	int reassociate;  /* reassociation requested */
+	int roaming;      /* roaming requested */
 	int disconnected; /* all connections disabled; i.e., do no reassociate
 			   * before this has been cleared */
 	struct wpa_ssid *current_ssid;
@@ -285,6 +293,11 @@ struct wpa_supplicant {
 
 	void *drv_priv; /* private data used by driver_ops */
 	void *global_drv_priv;
+
+	u8 *bssid_filter;
+	size_t bssid_filter_count;
+
+	enum { WPA_SETBAND_AUTO, WPA_SETBAND_5G, WPA_SETBAND_2G } setband;
 
 	/* previous scan was wildcard when interleaving between
 	 * wildcard scans and specific SSID scan when max_ssids=1 */
@@ -329,6 +342,10 @@ struct wpa_supplicant {
 			     * previous association event */
 
 	struct scard_data *scard;
+#ifdef PCSC_FUNCS
+	char imsi[20];
+	int mnc_len;
+#endif /* PCSC_FUNCS */
 
 	unsigned char last_eapol_src[ETH_ALEN];
 
@@ -583,6 +600,7 @@ int wpa_supplicant_set_bss_expiration_count(struct wpa_supplicant *wpa_s,
 int wpa_supplicant_set_debug_params(struct wpa_global *global,
 				    int debug_level, int debug_timestamp,
 				    int debug_show_keys);
+void free_hw_features(struct wpa_supplicant *wpa_s);
 
 void wpa_show_license(void);
 
@@ -610,6 +628,9 @@ void wpas_connection_failed(struct wpa_supplicant *wpa_s, const u8 *bssid);
 int wpas_driver_bss_selection(struct wpa_supplicant *wpa_s);
 
 /* events.c */
+void wpa_supplicant_mark_roaming(struct wpa_supplicant *wpa_s);
+void wpa_supplicant_clear_roaming(struct wpa_supplicant *wpa_s,
+				  int ignore_deauth_event);
 void wpa_supplicant_mark_disassoc(struct wpa_supplicant *wpa_s);
 int wpa_supplicant_connect(struct wpa_supplicant *wpa_s,
 			   struct wpa_bss *selected,

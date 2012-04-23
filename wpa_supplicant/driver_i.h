@@ -2,14 +2,8 @@
  * wpa_supplicant - Internal driver interface wrappers
  * Copyright (c) 2003-2009, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #ifndef DRIVER_I_H
@@ -438,6 +432,13 @@ static inline int wpa_drv_deinit_ap(struct wpa_supplicant *wpa_s)
 	return 0;
 }
 
+static inline int wpa_drv_deinit_p2p_cli(struct wpa_supplicant *wpa_s)
+{
+	if (wpa_s->driver->deinit_p2p_cli)
+		return wpa_s->driver->deinit_p2p_cli(wpa_s->drv_priv);
+	return 0;
+}
+
 static inline void wpa_drv_suspend(struct wpa_supplicant *wpa_s)
 {
 	if (wpa_s->driver->suspend)
@@ -666,6 +667,14 @@ static inline void wpa_drv_set_rekey_info(struct wpa_supplicant *wpa_s,
 	if (!wpa_s->driver->set_rekey_info)
 		return;
 	wpa_s->driver->set_rekey_info(wpa_s->drv_priv, kek, kck, replay_ctr);
+}
+
+static inline int wpa_drv_radio_disable(struct wpa_supplicant *wpa_s,
+					int disabled)
+{
+	if (!wpa_s->driver->radio_disable)
+		return -1;
+	return wpa_s->driver->radio_disable(wpa_s->drv_priv, disabled);
 }
 
 static inline int wpa_drv_driver_cmd(struct wpa_supplicant *wpa_s,

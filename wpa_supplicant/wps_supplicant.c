@@ -2,14 +2,8 @@
  * wpa_supplicant / WPS integration
  * Copyright (c) 2008-2010, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -77,8 +71,10 @@ int wpas_wps_eapol_cb(struct wpa_supplicant *wpa_s)
 	if (wpa_s->key_mgmt == WPA_KEY_MGMT_WPS && wpa_s->current_ssid &&
 	    !(wpa_s->current_ssid->key_mgmt & WPA_KEY_MGMT_WPS)) {
 		int disabled = wpa_s->current_ssid->disabled;
+		unsigned int freq = wpa_s->assoc_freq;
 		wpa_printf(MSG_DEBUG, "WPS: Network configuration replaced - "
-			   "try to associate with the received credential");
+			   "try to associate with the received credential "
+			   "(freq=%u)", freq);
 		wpa_supplicant_deauthenticate(wpa_s,
 					      WLAN_REASON_DEAUTH_LEAVING);
 		if (disabled) {
@@ -87,7 +83,7 @@ int wpas_wps_eapol_cb(struct wpa_supplicant *wpa_s)
 			return 1;
 		}
 		wpa_s->after_wps = 5;
-		wpa_s->wps_freq = wpa_s->assoc_freq;
+		wpa_s->wps_freq = freq;
 		wpa_s->normal_scans = 0;
 		wpa_s->reassociate = 1;
 		wpa_supplicant_req_scan(wpa_s, 0, 0);
@@ -1373,6 +1369,14 @@ int wpas_wps_scan_pbc_overlap(struct wpa_supplicant *wpa_s,
 
 	if (!eap_is_wps_pbc_enrollee(&ssid->eap))
 		return 0;
+
+#ifdef CONFIG_P2P
+	if (wpa_s->p2p_in_provisioning) {
+		wpa_printf(MSG_DEBUG,
+			   "WPS: Don't check for PBC overlap in P2P");
+		return 0;
+	}
+#endif
 
 	wpa_printf(MSG_DEBUG, "WPS: Check whether PBC session overlap is "
 		   "present in scan results; selected BSSID " MACSTR,

@@ -2,14 +2,8 @@
  * WPA Supplicant - Driver event processing
  * Copyright (c) 2003-2012, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -104,6 +98,24 @@ void wpa_supplicant_stop_countermeasures(void *eloop_ctx, void *sock_ctx)
 	}
 }
 
+void wpa_supplicant_mark_roaming(struct wpa_supplicant *wpa_s)
+{
+	wpa_s->roaming_in_progress = 1;
+	os_memcpy(wpa_s->prev_bssid, wpa_s->bssid, ETH_ALEN);
+	wpa_s->prev_ssid = wpa_s->current_ssid;
+	wpa_dbg(wpa_s, MSG_DEBUG, "Saving prev AP info for roaming recovery - "
+		"SSID ID: %d BSSID: " MACSTR,
+		wpa_s->prev_ssid->id, MAC2STR(wpa_s->prev_bssid));
+}
+
+void wpa_supplicant_clear_roaming(struct wpa_supplicant *wpa_s,
+				  int ignore_deauth_event)
+{
+	wpa_s->roaming_in_progress = 0;
+	wpa_s->ignore_deauth_event = ignore_deauth_event;
+	wpa_s->prev_ssid = NULL;
+	os_memset(wpa_s->prev_bssid, 0, ETH_ALEN);
+}
 
 void wpa_supplicant_mark_disassoc(struct wpa_supplicant *wpa_s)
 {
@@ -273,7 +285,7 @@ int wpa_supplicant_scard_init(struct wpa_supplicant *wpa_s,
 	else
 		type = SCARD_GSM_SIM_ONLY;
 
-	wpa_s->scard = scard_init(type);
+	wpa_s->scard = scard_init(type, NULL);
 	if (wpa_s->scard == NULL) {
 		wpa_msg(wpa_s, MSG_WARNING, "Failed to initialize SIM "
 			"(pcsc-lite)");
@@ -634,8 +646,22 @@ static struct wpa_ssid * wpa_scan_res_match(struct wpa_supplicant *wpa_s,
 		}
 	}
 
+	if (wpa_s->roaming &&
+	    os_memcmp(wpa_s->bssid, bss->bssid, ETH_ALEN) == 0) {
+		wpa_dbg(wpa_s, MSG_DEBUG, "   skip - current bssid (roaming)");
+		return NULL;
+	}
+
 	if (ssid_len == 0) {
 		wpa_dbg(wpa_s, MSG_DEBUG, "   skip - SSID not known");
+		return NULL;
+	}
+
+	if (wpa_s->wpa_state >= WPA_AUTHENTICATING &&
+	    wpa_s->current_ssid &&
+	    os_memcmp(wpa_s->current_ssid->ssid, ssid_, ssid_len) != 0) {
+		wpa_dbg(wpa_s, MSG_DEBUG, "   skip - block roaming to "
+			"a different SSID while connected");
 		return NULL;
 	}
 
@@ -830,13 +856,16 @@ int wpa_supplicant_connect(struct wpa_supplicant *wpa_s,
 		wpa_msg(wpa_s, MSG_INFO, WPS_EVENT_OVERLAP
 			"PBC session overlap");
 #ifdef CONFIG_P2P
-		if (wpas_p2p_notif_pbc_overlap(wpa_s) == 1)
+		if (wpas_p2p_notif_pbc_overlap(wpa_s) == 1) {
+			wpa_supplicant_clear_roaming(wpa_s, 0);
 			return -1;
+		}
 #endif /* CONFIG_P2P */
 
 #ifdef CONFIG_WPS
 		wpas_wps_cancel(wpa_s);
 #endif /* CONFIG_WPS */
+		wpa_supplicant_clear_roaming(wpa_s, 0);
 		return -1;
 	}
 
@@ -845,12 +874,7 @@ int wpa_supplicant_connect(struct wpa_supplicant *wpa_s,
 	 * reassociation is requested. If we are in process of associating with
 	 * the selected BSSID, do not trigger new attempt.
 	 */
-	if ((wpa_s->reassociate
-#ifdef ANDROID_BRCM_P2P_PATCH
-		&& (os_memcmp(selected->bssid, wpa_s->bssid, ETH_ALEN) != 0)
-		&& (wpa_s->wpa_state != WPA_COMPLETED)
-#endif
-		)||
+	if (wpa_s->reassociate ||
 	    (os_memcmp(selected->bssid, wpa_s->bssid, ETH_ALEN) != 0 &&
 	     ((wpa_s->wpa_state != WPA_ASSOCIATING &&
 	       wpa_s->wpa_state != WPA_AUTHENTICATING) ||
@@ -858,7 +882,7 @@ int wpa_supplicant_connect(struct wpa_supplicant *wpa_s,
 	      0))) {
 		if (wpa_supplicant_scard_init(wpa_s, ssid)) {
 			wpa_supplicant_req_new_scan(wpa_s, 10, 0);
-			return 0;
+			wpa_supplicant_clear_roaming(wpa_s, 0);
 		}
 		wpa_msg(wpa_s, MSG_DEBUG, "Request association: "
 			"reassociate: %d  selected: "MACSTR "  bssid: " MACSTR
@@ -870,6 +894,7 @@ int wpa_supplicant_connect(struct wpa_supplicant *wpa_s,
 	} else {
 		wpa_dbg(wpa_s, MSG_DEBUG, "Already associated with the "
 			"selected AP");
+		wpa_supplicant_clear_roaming(wpa_s, 0);
 	}
 
 	return 0;
@@ -934,6 +959,8 @@ static int wpa_supplicant_need_to_roam(struct wpa_supplicant *wpa_s,
 
 	if (wpa_s->reassociate)
 		return 1; /* explicit request to reassociate */
+	if (wpa_s->roaming)
+		return 1; /* explicit request to roam */
 	if (wpa_s->wpa_state < WPA_ASSOCIATED)
 		return 1; /* we are not associated; continue */
 	if (wpa_s->current_ssid == NULL)
@@ -968,7 +995,7 @@ static int wpa_supplicant_need_to_roam(struct wpa_supplicant *wpa_s,
 	if (!current_bss)
 		return 1; /* current BSS not seen in scan results */
 
-#ifdef CONFIG_ROAMING
+#ifndef CONFIG_NO_ROAMING
 	wpa_dbg(wpa_s, MSG_DEBUG, "Considering within-ESS reassociation");
 	wpa_dbg(wpa_s, MSG_DEBUG, "Current BSS: " MACSTR " level=%d",
 		MAC2STR(current_bss->bssid), current_bss->level);
@@ -1002,34 +1029,11 @@ static int wpa_supplicant_need_to_roam(struct wpa_supplicant *wpa_s,
 		return 0;
 	}
 
+	wpa_supplicant_mark_roaming(wpa_s);
 	return 1;
-#else
+#else /* CONFIG_NO_ROAMING */
 	return 0;
-#endif
-}
-
-
-static int wpa_supplicant_assoc_update_ie(struct wpa_supplicant *wpa_s)
-{
-	const u8 *bss_wpa = NULL, *bss_rsn = NULL;
-
-	if (!wpa_s->current_bss || !wpa_s->current_ssid)
-		return -1;
-
-	if (!wpa_key_mgmt_wpa_any(wpa_s->current_ssid->key_mgmt))
-		return 0;
-
-	bss_wpa = wpa_bss_get_vendor_ie(wpa_s->current_bss,
-					WPA_IE_VENDOR_TYPE);
-	bss_rsn = wpa_bss_get_ie(wpa_s->current_bss, WLAN_EID_RSN);
-
-	if (wpa_sm_set_ap_wpa_ie(wpa_s->wpa, bss_wpa,
-				 bss_wpa ? 2 + bss_wpa[1] : 0) ||
-	    wpa_sm_set_ap_rsn_ie(wpa_s->wpa, bss_rsn,
-				 bss_rsn ? 2 + bss_rsn[1] : 0))
-		return -1;
-
-	return 0;
+#endif /* CONFIG_NO_ROAMING */
 }
 
 
@@ -1176,9 +1180,9 @@ static int _wpa_supplicant_event_scan_results(struct wpa_supplicant *wpa_s,
 				return 0;
 			}
 #endif /* CONFIG_P2P */
-			if (wpa_supplicant_req_sched_scan(wpa_s))
-				wpa_supplicant_req_new_scan(wpa_s, timeout_sec,
-							    timeout_usec);
+			wpa_supplicant_req_sched_scan(wpa_s);
+			wpa_supplicant_req_new_scan(wpa_s, timeout_sec,
+						    timeout_usec);
 		}
 	}
 	return 0;
@@ -1414,6 +1418,30 @@ static struct wpa_bss * wpa_supplicant_get_new_bss(
 }
 
 
+static int wpa_supplicant_assoc_update_ie(struct wpa_supplicant *wpa_s)
+{
+	const u8 *bss_wpa = NULL, *bss_rsn = NULL;
+
+	if (!wpa_s->current_bss || !wpa_s->current_ssid)
+		return -1;
+
+	if (!wpa_key_mgmt_wpa_any(wpa_s->current_ssid->key_mgmt))
+		return 0;
+
+	bss_wpa = wpa_bss_get_vendor_ie(wpa_s->current_bss,
+					WPA_IE_VENDOR_TYPE);
+	bss_rsn = wpa_bss_get_ie(wpa_s->current_bss, WLAN_EID_RSN);
+
+	if (wpa_sm_set_ap_wpa_ie(wpa_s->wpa, bss_wpa,
+				 bss_wpa ? 2 + bss_wpa[1] : 0) ||
+	    wpa_sm_set_ap_rsn_ie(wpa_s->wpa, bss_rsn,
+				 bss_rsn ? 2 + bss_rsn[1] : 0))
+		return -1;
+
+	return 0;
+}
+
+
 static void wpa_supplicant_event_assoc(struct wpa_supplicant *wpa_s,
 				       union wpa_event_data *data)
 {
@@ -1561,7 +1589,7 @@ static void wpa_supplicant_event_assoc(struct wpa_supplicant *wpa_s,
 		struct os_time now, age;
 		os_get_time(&now);
 		os_time_sub(&now, &wpa_s->pending_eapol_rx_time, &age);
-		if (age.sec == 0 && age.usec < 100000 &&
+		if (age.sec == 0 && age.usec < 500000 &&
 		    os_memcmp(wpa_s->pending_eapol_rx_src, bssid, ETH_ALEN) ==
 		    0) {
 			wpa_dbg(wpa_s, MSG_DEBUG, "Process pending EAPOL "
@@ -1614,7 +1642,8 @@ static int disconnect_reason_recoverable(u16 reason_code)
 
 static void wpa_supplicant_event_disassoc(struct wpa_supplicant *wpa_s,
 					  u16 reason_code,
-					  int locally_generated)
+					  int locally_generated,
+					  const u8 *addr)
 {
 	const u8 *bssid;
 	int authenticating;
@@ -1633,6 +1662,13 @@ static void wpa_supplicant_event_disassoc(struct wpa_supplicant *wpa_s,
 		 */
 		wpa_dbg(wpa_s, MSG_DEBUG, "Disconnect event - ignore in "
 			"IBSS/WPA-None mode");
+		return;
+	}
+
+	if (addr && wpa_s->bssid && os_memcmp(wpa_s->bssid, addr, ETH_ALEN)) {
+		/* This may occur during roaming */
+		wpa_dbg(wpa_s, MSG_DEBUG, "Ignore disconnect from"
+			" a BSS which is not the current one");
 		return;
 	}
 
@@ -1678,9 +1714,13 @@ static void wpa_supplicant_event_disassoc(struct wpa_supplicant *wpa_s,
 	if (wpa_s->wpa_state >= WPA_AUTHENTICATING)
 		wpas_connection_failed(wpa_s, bssid);
 	wpa_sm_notify_disassoc(wpa_s->wpa);
-	wpa_msg(wpa_s, MSG_INFO, WPA_EVENT_DISCONNECTED "bssid=" MACSTR
-		" reason=%d",
-		MAC2STR(bssid), reason_code);
+	if (!is_zero_ether_addr(bssid) ||
+	    wpa_s->wpa_state >= WPA_AUTHENTICATING) {
+		wpa_msg(wpa_s, MSG_INFO, WPA_EVENT_DISCONNECTED "bssid=" MACSTR
+			" reason=%d%s",
+			MAC2STR(bssid), reason_code,
+			locally_generated ? " locally_generated=1" : "");
+	}
 	if (wpa_supplicant_dynamic_keys(wpa_s)) {
 		wpa_dbg(wpa_s, MSG_DEBUG, "Disconnect event - remove keys");
 		wpa_s->keys_cleared = 0;
@@ -1843,11 +1883,13 @@ wpa_supplicant_event_interface_status(struct wpa_supplicant *wpa_s,
 			wpa_msg(wpa_s, MSG_INFO, "Failed to initialize the "
 				"driver after interface was added");
 		}
+		wpa_supplicant_set_state(wpa_s, WPA_DISCONNECTED);
 		break;
 	case EVENT_INTERFACE_REMOVED:
 		wpa_dbg(wpa_s, MSG_DEBUG, "Configured interface was removed");
 		wpa_s->interface_removed = 1;
 		wpa_supplicant_mark_disassoc(wpa_s);
+		wpa_supplicant_set_state(wpa_s, WPA_INTERFACE_DISABLED);
 		l2_packet_deinit(wpa_s->l2);
 		wpa_s->l2 = NULL;
 #ifdef CONFIG_IBSS_RSN
@@ -2186,8 +2228,19 @@ void wpa_supplicant_event(void *ctx, enum wpa_event_type event,
 			break;
 		}
 #endif /* CONFIG_AP */
-		wpa_supplicant_event_disassoc(wpa_s, reason_code,
-					      locally_generated);
+
+		if (data->deauth_info.reason_code
+		    == WLAN_REASON_PREV_AUTH_NOT_VALID &&
+		    wpa_s->ignore_deauth_event) {
+			wpa_dbg(wpa_s, MSG_DEBUG, "Ignore deauth event"
+				" with reason=2");
+			wpa_s->ignore_deauth_event = 0;
+		} else {
+			wpa_supplicant_event_disassoc(wpa_s,
+						      reason_code,
+						      locally_generated,
+						      data->deauth_info.addr);
+		}
 		break;
 	case EVENT_MICHAEL_MIC_FAILURE:
 		wpa_supplicant_event_michael_mic_failure(wpa_s, data);
@@ -2338,25 +2391,6 @@ void wpa_supplicant_event(void *ctx, enum wpa_event_type event,
 				size_t ie_len = data->rx_mgmt.frame_len -
 					(mgmt->u.probe_req.variable -
 					 data->rx_mgmt.frame);
-			#ifdef ANDROID_BRCM_P2P_PATCH
-				wpa_printf(MSG_DEBUG, "Non-AP: Probe request frame ");
-			{
-				/* If we are Go or client, we need not reply the probe reqest on eth0 interface */
-				struct wpa_supplicant* ifs;
-				int ignore = 0;
-				for (ifs = wpa_s->global->ifaces; ifs; ifs = ifs->next) {
-					if ( (ifs->p2p_group_interface == P2P_GROUP_INTERFACE_GO ) ||(ifs->p2p_group_interface == P2P_GROUP_INTERFACE_CLIENT )) {
-						wpa_printf(MSG_DEBUG, "Non-AP: NEERAJKG Ignoring Probe request");
-						ignore = 1;
-						break;
-					}
-				}
-				if(ignore)
-					break;
-				else
-					wpa_printf(MSG_DEBUG, "Non-AP: Couln't Ignore Probe request %d", wpa_s->p2p_group_interface);
-			}
-			#endif
 				wpas_p2p_probe_req_rx(wpa_s, src, mgmt->da,
 						      mgmt->bssid, ie, ie_len);
 				break;
@@ -2551,6 +2585,14 @@ void wpa_supplicant_event(void *ctx, enum wpa_event_type event,
 	case EVENT_ROAMING_DISABLED:
 		wpa_supplicant_disable_roaming(wpa_s);
 		break;
+
+	case EVENT_START_ROAMING:
+		if (!is_zero_ether_addr(wpa_s->bssid)) {
+			wpa_s->roaming = 1;
+			bgscan_notify_beacon_loss(wpa_s);
+		}
+		break;
+
 	case EVENT_INTERFACE_ENABLED:
 		wpa_dbg(wpa_s, MSG_DEBUG, "Interface was enabled");
 		if (wpa_s->wpa_state == WPA_INTERFACE_DISABLED) {
@@ -2577,6 +2619,11 @@ void wpa_supplicant_event(void *ctx, enum wpa_event_type event,
 	case EVENT_CHANNEL_LIST_CHANGED:
 		if (wpa_s->drv_priv == NULL)
 			break; /* Ignore event during drv initialization */
+
+		free_hw_features(wpa_s);
+		wpa_s->hw.modes = wpa_drv_get_hw_feature_data(
+			wpa_s, &wpa_s->hw.num_modes, &wpa_s->hw.flags);
+
 #ifdef CONFIG_P2P
 		wpas_p2p_update_channel_list(wpa_s);
 #endif /* CONFIG_P2P */

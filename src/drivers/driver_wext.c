@@ -2,14 +2,8 @@
  * Driver interaction with generic Linux Wireless Extensions
  * Copyright (c) 2003-2010, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  *
  * This file implements a driver interface for the Linux Wireless Extensions.
  * When used with WE-18 or newer, this interface can be used as-is with number
@@ -594,10 +588,28 @@ static void wpa_driver_wext_event_link(struct wpa_driver_wext_data *drv,
 		   del ? "removed" : "added");
 
 	if (os_strcmp(drv->ifname, event.interface_status.ifname) == 0) {
-		if (del)
+		if (del) {
+			if (drv->if_removed) {
+				wpa_printf(MSG_DEBUG, "WEXT: if_removed "
+					   "already set - ignore event");
+				return;
+			}
 			drv->if_removed = 1;
-		else
+		} else {
+			if (if_nametoindex(drv->ifname) == 0) {
+				wpa_printf(MSG_DEBUG, "WEXT: Interface %s "
+					   "does not exist - ignore "
+					   "RTM_NEWLINK",
+					   drv->ifname);
+				return;
+			}
+			if (!drv->if_removed) {
+				wpa_printf(MSG_DEBUG, "WEXT: if_removed "
+					   "already cleared - ignore event");
+				return;
+			}
 			drv->if_removed = 0;
+		}
 	}
 
 	wpa_supplicant_event(drv->ctx, EVENT_INTERFACE_STATUS, &event);
@@ -653,6 +665,7 @@ static void wpa_driver_wext_event_rtm_newlink(void *ctx, struct ifinfomsg *ifi,
 	struct wpa_driver_wext_data *drv = ctx;
 	int attrlen, rta_len;
 	struct rtattr *attr;
+	char namebuf[IFNAMSIZ];
 
 	if (!wpa_driver_wext_own_ifindex(drv, ifi->ifi_index, buf, len)) {
 		wpa_printf(MSG_DEBUG, "Ignore event for foreign ifindex %d",
@@ -675,9 +688,25 @@ static void wpa_driver_wext_event_rtm_newlink(void *ctx, struct ifinfomsg *ifi,
 	}
 
 	if (drv->if_disabled && (ifi->ifi_flags & IFF_UP)) {
-		wpa_printf(MSG_DEBUG, "WEXT: Interface up");
-		drv->if_disabled = 0;
-		wpa_supplicant_event(drv->ctx, EVENT_INTERFACE_ENABLED, NULL);
+		if (if_indextoname(ifi->ifi_index, namebuf) &&
+		    linux_iface_up(drv->ioctl_sock, drv->ifname) == 0) {
+			wpa_printf(MSG_DEBUG, "WEXT: Ignore interface up "
+				   "event since interface %s is down",
+				   namebuf);
+		} else if (if_nametoindex(drv->ifname) == 0) {
+			wpa_printf(MSG_DEBUG, "WEXT: Ignore interface up "
+				   "event since interface %s does not exist",
+				   drv->ifname);
+		} else if (drv->if_removed) {
+			wpa_printf(MSG_DEBUG, "WEXT: Ignore interface up "
+				   "event since interface %s is marked "
+				   "removed", drv->ifname);
+		} else {
+			wpa_printf(MSG_DEBUG, "WEXT: Interface up");
+			drv->if_disabled = 0;
+			wpa_supplicant_event(drv->ctx, EVENT_INTERFACE_ENABLED,
+					     NULL);
+		}
 	}
 
 	/*

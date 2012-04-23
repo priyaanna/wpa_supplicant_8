@@ -2,14 +2,8 @@
  * Wi-Fi Direct - P2P module
  * Copyright (c) 2009-2010, Atheros Communications
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -157,14 +151,14 @@ u16 p2p_get_provisioning_info(struct p2p_data *p2p, const u8 *addr)
 }
 
 
-void p2p_clear_provisioning_info(struct p2p_data *p2p, const u8 *iface_addr)
+void p2p_clear_provisioning_info(struct p2p_data *p2p, const u8 *addr)
 {
 	struct p2p_device *dev = NULL;
 
-	if (!iface_addr || !p2p)
+	if (!addr || !p2p)
 		return;
 
-	dev = p2p_get_device_interface(p2p, iface_addr);
+	dev = p2p_get_device(p2p, addr);
 	if (dev)
 		dev->wps_prov_info = 0;
 }
@@ -571,7 +565,8 @@ int p2p_add_device(struct p2p_data *p2p, const u8 *addr, int freq, int level,
 	struct p2p_device *dev;
 	struct p2p_message msg;
 	const u8 *p2p_dev_addr;
-	int i;
+	int i, changed = 0;
+	enum p2p_go_state old_state;
 
 	os_memset(&msg, 0, sizeof(msg));
 	if (p2p_parse_ies(ies, ies_len, &msg)) {
@@ -641,8 +636,17 @@ int p2p_add_device(struct p2p_data *p2p, const u8 *addr, int freq, int level,
 			"results (" MACSTR " %d -> %d MHz (DS param %d)",
 			MAC2STR(dev->info.p2p_device_addr), dev->listen_freq,
 			freq, msg.ds_params ? *msg.ds_params : -1);
+		changed = 1;
 	}
 	dev->listen_freq = freq;
+
+	old_state = dev->go_state;
+	if (msg.group_info)
+		dev->go_state = REMOTE_GO;
+	else
+		dev->go_state = UNKNOWN_GO;
+	changed |= (old_state != dev->go_state);
+
 	if (msg.group_info)
 		dev->oper_freq = freq;
 	dev->info.level = level;
@@ -671,7 +675,7 @@ int p2p_add_device(struct p2p_data *p2p, const u8 *addr, int freq, int level,
 	if (p2p_pending_sd_req(p2p, dev))
 		dev->flags |= P2P_DEV_SD_SCHEDULE;
 
-	if (dev->flags & P2P_DEV_REPORTED)
+	if ((dev->flags & P2P_DEV_REPORTED) && !changed)
 		return 0;
 
 	wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG,
@@ -781,6 +785,7 @@ static void p2p_search(struct p2p_data *p2p)
 {
 	int freq = 0;
 	enum p2p_scan_type type;
+	u16 pw_id = DEV_PW_DEFAULT;
 
 	if (p2p->drv_in_listen) {
 		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG, "P2P: Driver is still "
@@ -801,6 +806,9 @@ static void p2p_search(struct p2p_data *p2p)
 		type = P2P_SCAN_SPECIFIC;
 		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG, "P2P: Starting search "
 			"for freq %u (GO Neg)", freq);
+
+		/* Advertise immediate availability of WPS credential */
+		pw_id = p2p_wps_method_pw_id(p2p->go_neg_peer->wps_method);
 	} else if (p2p->invite_peer) {
 		/*
 		 * Only scan the known listen frequency of the peer
@@ -824,7 +832,7 @@ static void p2p_search(struct p2p_data *p2p)
 
 	if (p2p->cfg->p2p_scan(p2p->cfg->cb_ctx, type, freq,
 			       p2p->num_req_dev_types, p2p->req_dev_types,
-			       p2p->find_dev_id) < 0) {
+			       p2p->find_dev_id, pw_id)) {
 		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG,
 			"P2P: Scan request failed");
 		p2p_continue_find(p2p);
@@ -968,12 +976,14 @@ int p2p_find(struct p2p_data *p2p, unsigned int timeout,
 	case P2P_FIND_PROGRESSIVE:
 		res = p2p->cfg->p2p_scan(p2p->cfg->cb_ctx, P2P_SCAN_FULL, 0,
 					 p2p->num_req_dev_types,
-					 p2p->req_dev_types, dev_id);
+					 p2p->req_dev_types, dev_id,
+					 DEV_PW_DEFAULT);
 		break;
 	case P2P_FIND_ONLY_SOCIAL:
 		res = p2p->cfg->p2p_scan(p2p->cfg->cb_ctx, P2P_SCAN_SOCIAL, 0,
 					 p2p->num_req_dev_types,
-					 p2p->req_dev_types, dev_id);
+					 p2p->req_dev_types, dev_id,
+					 DEV_PW_DEFAULT);
 		break;
 	default:
 		return -1;
@@ -1030,10 +1040,20 @@ void p2p_stop_find_for_freq(struct p2p_data *p2p, int freq)
 	p2p->go_neg_peer = NULL;
 	p2p->sd_peer = NULL;
 	p2p->invite_peer = NULL;
+	p2p_stop_listen_for_freq(p2p, freq);
+}
+
+
+void p2p_stop_listen_for_freq(struct p2p_data *p2p, int freq)
+{
 	if (freq > 0 && p2p->drv_in_listen == freq && p2p->in_listen) {
 		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG, "P2P: Skip stop_listen "
 			"since we are on correct channel for response");
 		return;
+	}
+	if (p2p->in_listen) {
+		p2p->in_listen = 0;
+		p2p_clear_timeout(p2p);
 	}
 	if (p2p->drv_in_listen) {
 		/*
@@ -1761,12 +1781,18 @@ struct wpabuf * p2p_build_probe_resp_ies(struct p2p_data *p2p)
 {
 	struct wpabuf *buf;
 	u8 *len;
+	int pw_id = -1;
 
 	buf = wpabuf_alloc(1000);
 	if (buf == NULL)
 		return NULL;
 
-	p2p_build_wps_ie(p2p, buf, DEV_PW_DEFAULT, 1);
+	if (p2p->go_neg_peer) {
+		/* Advertise immediate availability of WPS credential */
+		pw_id = p2p_wps_method_pw_id(p2p->go_neg_peer->wps_method);
+	}
+
+	p2p_build_wps_ie(p2p, buf, pw_id, 1);
 
 	/* P2P IE */
 	len = p2p_buf_add_ie_hdr(buf);
@@ -2241,11 +2267,7 @@ void p2p_deinit(struct p2p_data *p2p)
 void p2p_flush(struct p2p_data *p2p)
 {
 	struct p2p_device *dev, *prev;
-	p2p_clear_timeout(p2p);
-	p2p_set_state(p2p, P2P_IDLE);
-	p2p->start_after_scan = P2P_AFTER_SCAN_NOTHING;
-	p2p->go_neg_peer = NULL;
-	eloop_cancel_timeout(p2p_find_timeout, p2p, NULL);
+	p2p_stop_find(p2p);
 	dl_list_for_each_safe(dev, prev, &p2p->devices, struct p2p_device,
 			      list) {
 		dl_list_del(&dev->list);
@@ -2851,6 +2873,20 @@ int p2p_listen_end(struct p2p_data *p2p, unsigned int freq)
 		p2p_connect_send(p2p, p2p->go_neg_peer);
 		return 1;
 	} else if (p2p->state == P2P_SEARCH) {
+		if (p2p->p2p_scan_running) {
+			 /*
+			  * Search is already in progress. This can happen if
+			  * an Action frame RX is reported immediately after
+			  * the end of a remain-on-channel operation and the
+			  * response frame to that is sent using an offchannel
+			  * operation while in p2p_find. Avoid an attempt to
+			  * restart a scan here.
+			  */
+			wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG, "P2P: p2p_scan "
+				"already in progress - do not try to start a "
+				"new one");
+			return 1;
+		}
 		p2p_search(p2p);
 		return 1;
 	}
@@ -2900,15 +2936,7 @@ static void p2p_timeout_wait_peer_connect(struct p2p_data *p2p)
 	 * state once per second to give other uses a chance to use the radio.
 	 */
 	p2p_set_state(p2p, P2P_WAIT_PEER_IDLE);
-#ifdef ANDROID_BRCM_P2P_PATCH
-	/*
-	 * We need to be back in Listen state soon enough so that we don't miss
-	 * the GO Nego req from the peer.
-	*/
-	p2p_set_timeout(p2p, 0, 0);
-#else /* ANDROID_BRCM_P2P_PATCH */
 	p2p_set_timeout(p2p, 0, 500000);
-#endif /* ANDROID_BRCM_P2P_PATCH */
 }
 
 
