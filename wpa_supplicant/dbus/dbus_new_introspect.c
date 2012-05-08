@@ -89,11 +89,10 @@ static void add_entry(struct wpabuf *xml, const char *type, const char *name,
 static void add_property(struct wpabuf *xml,
 			 const struct wpa_dbus_property_desc *dsc)
 {
-	wpabuf_printf(xml, "<property name=\"%s\" type=\"%s\" "
-		      "access=\"%s%s\"/>",
+	wpabuf_printf(xml, "<property name=\"%s\" type=\"%s\" access=\"%s\"/>",
 		      dsc->dbus_property, dsc->type,
-		      dsc->getter ? "read" : "",
-		      dsc->setter ? "write" : "");
+		      (dsc->access == R ? "read" :
+		       (dsc->access == W ? "write" : "readwrite")));
 }
 
 
@@ -164,12 +163,6 @@ static void add_interfaces(struct dl_list *list, struct wpabuf *xml)
 		if (wpabuf_len(iface->xml) + 20 < wpabuf_tailroom(xml)) {
 			wpabuf_put_buf(xml, iface->xml);
 			wpabuf_put_str(xml, "</interface>");
-		} else {
-			wpa_printf(MSG_DEBUG, "dbus: Not enough room for "
-				   "add_interfaces inspect data: tailroom %u, "
-				   "add %u",
-				   (unsigned int) wpabuf_tailroom(xml),
-				   (unsigned int) wpabuf_len(iface->xml));
 		}
 		dl_list_del(&iface->list);
 		wpabuf_free(iface->xml);
@@ -257,7 +250,7 @@ DBusMessage * wpa_dbus_introspect(DBusMessage *message,
 	DBusMessage *reply;
 	struct wpabuf *xml;
 
-	xml = wpabuf_alloc(10000);
+	xml = wpabuf_alloc(8000);
 	if (xml == NULL)
 		return NULL;
 

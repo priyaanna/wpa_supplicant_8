@@ -1,6 +1,6 @@
 /*
  * SHA-256 hash implementation and interface functions
- * Copyright (c) 2003-2011, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2003-2007, Jouni Malinen <j@w1.fi>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -16,8 +16,18 @@
 
 #include "common.h"
 #include "sha256.h"
-#include "sha256_i.h"
 #include "crypto.h"
+
+struct sha256_state {
+	u64 length;
+	u32 state[8], curlen;
+	u8 buf[64];
+};
+
+static void sha256_init(struct sha256_state *md);
+static int sha256_process(struct sha256_state *md, const unsigned char *in,
+			  unsigned long inlen);
+static int sha256_done(struct sha256_state *md, unsigned char *out);
 
 
 /**
@@ -127,7 +137,7 @@ static int sha256_compress(struct sha256_state *md, unsigned char *buf)
 
 
 /* Initialize the hash state */
-void sha256_init(struct sha256_state *md)
+static void sha256_init(struct sha256_state *md)
 {
 	md->curlen = 0;
 	md->length = 0;
@@ -148,31 +158,32 @@ void sha256_init(struct sha256_state *md)
    @param inlen  The length of the data (octets)
    @return CRYPT_OK if successful
 */
-int sha256_process(struct sha256_state *md, const unsigned char *in,
-		   unsigned long inlen)
+static int sha256_process(struct sha256_state *md, const unsigned char *in,
+			  unsigned long inlen)
 {
 	unsigned long n;
+#define block_size 64
 
-	if (md->curlen >= sizeof(md->buf))
+	if (md->curlen > sizeof(md->buf))
 		return -1;
 
 	while (inlen > 0) {
-		if (md->curlen == 0 && inlen >= SHA256_BLOCK_SIZE) {
+		if (md->curlen == 0 && inlen >= block_size) {
 			if (sha256_compress(md, (unsigned char *) in) < 0)
 				return -1;
-			md->length += SHA256_BLOCK_SIZE * 8;
-			in += SHA256_BLOCK_SIZE;
-			inlen -= SHA256_BLOCK_SIZE;
+			md->length += block_size * 8;
+			in += block_size;
+			inlen -= block_size;
 		} else {
-			n = MIN(inlen, (SHA256_BLOCK_SIZE - md->curlen));
+			n = MIN(inlen, (block_size - md->curlen));
 			os_memcpy(md->buf + md->curlen, in, n);
 			md->curlen += n;
 			in += n;
 			inlen -= n;
-			if (md->curlen == SHA256_BLOCK_SIZE) {
+			if (md->curlen == block_size) {
 				if (sha256_compress(md, md->buf) < 0)
 					return -1;
-				md->length += 8 * SHA256_BLOCK_SIZE;
+				md->length += 8 * block_size;
 				md->curlen = 0;
 			}
 		}
@@ -188,7 +199,7 @@ int sha256_process(struct sha256_state *md, const unsigned char *in,
    @param out [out] The destination of the hash (32 bytes)
    @return CRYPT_OK if successful
 */
-int sha256_done(struct sha256_state *md, unsigned char *out)
+static int sha256_done(struct sha256_state *md, unsigned char *out)
 {
 	int i;
 
@@ -206,14 +217,14 @@ int sha256_done(struct sha256_state *md, unsigned char *out)
 	 * encoding like normal.
 	 */
 	if (md->curlen > 56) {
-		while (md->curlen < SHA256_BLOCK_SIZE) {
+		while (md->curlen < 64) {
 			md->buf[md->curlen++] = (unsigned char) 0;
 		}
 		sha256_compress(md, md->buf);
 		md->curlen = 0;
 	}
 
-	/* pad up to 56 bytes of zeroes */
+	/* pad upto 56 bytes of zeroes */
 	while (md->curlen < 56) {
 		md->buf[md->curlen++] = (unsigned char) 0;
 	}

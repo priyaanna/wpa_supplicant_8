@@ -208,7 +208,6 @@ struct wpa_auth_callbacks {
 struct wpa_authenticator * wpa_init(const u8 *addr,
 				    struct wpa_auth_config *conf,
 				    struct wpa_auth_callbacks *cb);
-int wpa_init_keys(struct wpa_authenticator *wpa_auth);
 void wpa_deinit(struct wpa_authenticator *wpa_auth);
 int wpa_reconfig(struct wpa_authenticator *wpa_auth,
 		 struct wpa_auth_config *conf);

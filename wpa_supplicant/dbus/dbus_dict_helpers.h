@@ -156,8 +156,7 @@ struct wpa_dbus_dict_entry {
 };
 
 dbus_bool_t wpa_dbus_dict_open_read(DBusMessageIter *iter,
-				    DBusMessageIter *iter_dict,
-				    DBusError *error);
+				    DBusMessageIter *iter_dict);
 
 dbus_bool_t wpa_dbus_dict_get_entry(DBusMessageIter *iter_dict,
 				    struct wpa_dbus_dict_entry *entry);

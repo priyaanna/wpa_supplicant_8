@@ -208,10 +208,10 @@ struct eapol_ctx {
 	/**
 	 * eap_param_needed - Notify that EAP parameter is needed
 	 * @ctx: Callback context (ctx)
-	 * @field: Field indicator (e.g., WPA_CTRL_REQ_EAP_IDENTITY)
+	 * @field: Field name (e.g., "IDENTITY")
 	 * @txt: User readable text describing the required parameter
 	 */
-	void (*eap_param_needed)(void *ctx, enum wpa_ctrl_req_type field,
+	void (*eap_param_needed)(void *ctx, const char *field,
 				 const char *txt);
 
 	/**
@@ -231,11 +231,6 @@ struct eapol_ctx {
 	 */
 	void (*cert_cb)(void *ctx, int depth, const char *subject,
 			const char *cert_hash, const struct wpabuf *cert);
-
-	/**
-	 * cert_in_cb - Include server certificates in callback
-	 */
-	int cert_in_cb;
 };
 
 

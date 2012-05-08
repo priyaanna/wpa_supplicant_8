@@ -16,7 +16,6 @@
 #ifndef CTRL_IFACE_DBUS_NEW_H
 #define CTRL_IFACE_DBUS_NEW_H
 
-#include "common/defs.h"
 #include "p2p/p2p.h"
 
 struct wpa_global;
@@ -25,6 +24,7 @@ struct wpa_ssid;
 struct wps_event_m2d;
 struct wps_event_fail;
 struct wps_credential;
+enum wpa_states;
 
 enum wpas_dbus_prop {
 	WPAS_DBUS_PROP_AP_SCAN,
@@ -131,10 +131,6 @@ void wpas_dbus_bss_signal_prop_changed(struct wpa_supplicant *wpa_s,
 void wpas_dbus_signal_network_enabled_changed(struct wpa_supplicant *wpa_s,
 					      struct wpa_ssid *ssid);
 void wpas_dbus_signal_network_selected(struct wpa_supplicant *wpa_s, int id);
-void wpas_dbus_signal_network_request(struct wpa_supplicant *wpa_s,
-				      struct wpa_ssid *ssid,
-				      enum wpa_ctrl_req_type rtype,
-				      const char *default_text);
 void wpas_dbus_signal_scan_done(struct wpa_supplicant *wpa_s, int success);
 void wpas_dbus_signal_wps_cred(struct wpa_supplicant *wpa_s,
 			       const struct wps_credential *cred);
@@ -179,8 +175,7 @@ void wpas_dbus_signal_p2p_group_started(struct wpa_supplicant *wpa_s,
 					int client, int network_id);
 void wpas_dbus_register_p2p_group(struct wpa_supplicant *wpa_s,
 				  struct wpa_ssid *ssid);
-void wpas_dbus_signal_p2p_go_neg_resp(struct wpa_supplicant *wpa_s,
-				      struct p2p_go_neg_results *res);
+void wpas_dbus_signal_p2p_go_neg_resp(struct wpa_supplicant *wpa_s, int status);
 void wpas_dbus_unregister_p2p_group(struct wpa_supplicant *wpa_s,
 				    const struct wpa_ssid *ssid);
 int wpas_dbus_register_persistent_group(struct wpa_supplicant *wpa_s,
@@ -243,12 +238,6 @@ static inline void wpas_dbus_signal_network_enabled_changed(
 
 static inline void wpas_dbus_signal_network_selected(
 	struct wpa_supplicant *wpa_s, int id)
-{
-}
-
-static inline void wpas_dbus_signal_network_request(
-	struct wpa_supplicant *wpa_s, struct wpa_ssid *ssid,
-	enum wpa_ctrl_req_type rtype, const char *default_txt)
 {
 }
 
@@ -386,8 +375,7 @@ static inline int wpas_dbus_unregister_persistent_group(
 }
 
 static inline void
-wpas_dbus_signal_p2p_go_neg_resp(struct wpa_supplicant *wpa_s,
-				 struct p2p_go_neg_results *res)
+wpas_dbus_signal_p2p_go_neg_resp(struct wpa_supplicant *wpa_s, int status)
 {
 }
 

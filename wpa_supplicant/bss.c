@@ -50,15 +50,6 @@ static void wpa_bss_remove(struct wpa_supplicant *wpa_s, struct wpa_bss *bss)
 		" SSID '%s'", bss->id, MAC2STR(bss->bssid),
 		wpa_ssid_txt(bss->ssid, bss->ssid_len));
 	wpas_notify_bss_removed(wpa_s, bss->bssid, bss->id);
-#ifdef CONFIG_INTERWORKING
-	wpabuf_free(bss->anqp_venue_name);
-	wpabuf_free(bss->anqp_network_auth_type);
-	wpabuf_free(bss->anqp_roaming_consortium);
-	wpabuf_free(bss->anqp_ip_addr_type_availability);
-	wpabuf_free(bss->anqp_nai_realm);
-	wpabuf_free(bss->anqp_3gpp);
-	wpabuf_free(bss->anqp_domain_name);
-#endif /* CONFIG_INTERWORKING */
 	os_free(bss);
 }
 
@@ -102,55 +93,6 @@ static void wpa_bss_copy_res(struct wpa_bss *dst, struct wpa_scan_res *src)
 }
 
 
-static int wpa_bss_known(struct wpa_supplicant *wpa_s, struct wpa_bss *bss)
-{
-	struct wpa_ssid *ssid;
-
-	for (ssid = wpa_s->conf->ssid; ssid; ssid = ssid->next) {
-		if (ssid->ssid == NULL || ssid->ssid_len == 0)
-			continue;
-		if (ssid->ssid_len == bss->ssid_len &&
-		    os_memcmp(ssid->ssid, bss->ssid, ssid->ssid_len) == 0)
-			return 1;
-	}
-
-	return 0;
-}
-
-
-static int wpa_bss_remove_oldest_unknown(struct wpa_supplicant *wpa_s)
-{
-	struct wpa_bss *bss;
-
-	dl_list_for_each(bss, &wpa_s->bss, struct wpa_bss, list) {
-		if (!wpa_bss_known(wpa_s, bss)) {
-			wpa_bss_remove(wpa_s, bss);
-			return 0;
-		}
-	}
-
-	return -1;
-}
-
-
-static void wpa_bss_remove_oldest(struct wpa_supplicant *wpa_s)
-{
-	/*
-	 * Remove the oldest entry that does not match with any configured
-	 * network.
-	 */
-	if (wpa_bss_remove_oldest_unknown(wpa_s) == 0)
-		return;
-
-	/*
-	 * Remove the oldest entry since no better candidate for removal was
-	 * found.
-	 */
-	wpa_bss_remove(wpa_s, dl_list_first(&wpa_s->bss,
-					    struct wpa_bss, list));
-}
-
-
 static void wpa_bss_add(struct wpa_supplicant *wpa_s,
 			const u8 *ssid, size_t ssid_len,
 			struct wpa_scan_res *res)
@@ -176,8 +118,11 @@ static void wpa_bss_add(struct wpa_supplicant *wpa_s,
 		" SSID '%s'",
 		bss->id, MAC2STR(bss->bssid), wpa_ssid_txt(ssid, ssid_len));
 	wpas_notify_bss_added(wpa_s, bss->bssid, bss->id);
-	if (wpa_s->num_bss > wpa_s->conf->bss_max_count)
-		wpa_bss_remove_oldest(wpa_s);
+	if (wpa_s->num_bss > wpa_s->conf->bss_max_count) {
+		/* Remove the oldest entry */
+		wpa_bss_remove(wpa_s, dl_list_first(&wpa_s->bss,
+						    struct wpa_bss, list));
+	}
 }
 
 
@@ -538,23 +483,6 @@ struct wpa_bss * wpa_bss_get_bssid(struct wpa_supplicant *wpa_s,
 	}
 	return NULL;
 }
-
-
-#ifdef CONFIG_P2P
-struct wpa_bss * wpa_bss_get_p2p_dev_addr(struct wpa_supplicant *wpa_s,
-					  const u8 *dev_addr)
-{
-	struct wpa_bss *bss;
-	dl_list_for_each_reverse(bss, &wpa_s->bss, struct wpa_bss, list) {
-		u8 addr[ETH_ALEN];
-		if (p2p_parse_dev_addr((const u8 *) (bss + 1), bss->ie_len,
-				       addr) == 0 &&
-		    os_memcmp(addr, dev_addr, ETH_ALEN) == 0)
-			return bss;
-	}
-	return NULL;
-}
-#endif /* CONFIG_P2P */
 
 
 struct wpa_bss * wpa_bss_get_id(struct wpa_supplicant *wpa_s, unsigned int id)

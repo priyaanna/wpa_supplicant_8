@@ -69,11 +69,10 @@ struct wpa_state_machine {
 	Boolean pairwise_set;
 	int keycount;
 	Boolean Pair;
-	struct wpa_key_replay_counter {
+	struct {
 		u8 counter[WPA_REPLAY_COUNTER_LEN];
 		Boolean valid;
-	} key_replay[RSNA_MAX_EAPOL_RETRIES],
-		prev_key_replay[RSNA_MAX_EAPOL_RETRIES];
+	} key_replay[RSNA_MAX_EAPOL_RETRIES];
 	Boolean PInitAKeys; /* WPA only, not in IEEE 802.11i */
 	Boolean PTKRequest; /* not in IEEE 802.11i state machine */
 	Boolean has_GTK;
@@ -87,8 +86,6 @@ struct wpa_state_machine {
 	unsigned int pending_deinit:1;
 	unsigned int started:1;
 	unsigned int mgmt_frame_prot:1;
-	unsigned int rx_eapol_key_secure:1;
-	unsigned int update_snonce:1;
 #ifdef CONFIG_IEEE80211R
 	unsigned int ft_completed:1;
 	unsigned int pmk_r1_name_valid:1;

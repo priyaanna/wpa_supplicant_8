@@ -16,12 +16,19 @@ L_CFLAGS = -DWPA_IGNORE_CONFIG_ERRORS
 # Set Android log name
 L_CFLAGS += -DANDROID_LOG_NAME=\"hostapd\"
 
-ifeq ($(BOARD_WLAN_DEVICE), bcmdhd)
-L_CFLAGS += -DANDROID_BRCM_P2P_PATCH
+ifdef CONFIG_DRIVER_NL80211
+ifneq ($(BOARD_WLAN_DEVICE), wl12xx_mac80211)
+  L_CFLAGS += -DANDROID_BRCM_P2P_PATCH
+endif
 endif
 
 # Use Android specific directory for control interface sockets
 L_CFLAGS += -DCONFIG_CTRL_IFACE_CLIENT_DIR=\"/data/misc/wifi/sockets\"
+L_CFLAGS += -DCONFIG_CTRL_IFACE_DIR=\"/data/system/wpa_supplicant\"
+
+# Use Android specific directory for control interface sockets
+L_CFLAGS += -DCONFIG_CTRL_IFACE_CLIENT_DIR=\"/data/misc/wifi/sockets\"
+L_CFLAGS += -DCONFIG_CTRL_IFACE_DIR=\"/data/system/wpa_supplicant\"
 
 # To force sizeof(enum) = 4
 ifeq ($(TARGET_ARCH),arm)
@@ -80,7 +87,6 @@ OBJS += src/ap/ap_mlme.c
 OBJS += src/ap/wpa_auth_ie.c
 OBJS += src/ap/preauth_auth.c
 OBJS += src/ap/pmksa_cache_auth.c
-OBJS += src/ap/ieee802_11_shared.c
 OBJS += src/ap/beacon.c
 OBJS_d =
 OBJS_p =
@@ -774,8 +780,6 @@ L_CFLAGS += -DCONFIG_P2P_MANAGER
 OBJS += src/ap/p2p_hostapd.c
 endif
 
-OBJS += src/drivers/driver_common.c
-
 ifdef CONFIG_NO_STDOUT_DEBUG
 L_CFLAGS += -DCONFIG_NO_STDOUT_DEBUG
 endif
@@ -819,8 +823,7 @@ ifdef CONFIG_DRIVER_CUSTOM
 LOCAL_STATIC_LIBRARIES := libCustomWifi
 endif
 ifneq ($(BOARD_HOSTAPD_PRIVATE_LIB),)
-##Build as part of hostapd build now
-##LOCAL_STATIC_LIBRARIES += $(BOARD_HOSTAPD_PRIVATE_LIB)
+LOCAL_STATIC_LIBRARIES += $(BOARD_HOSTAPD_PRIVATE_LIB)
 endif
 LOCAL_SHARED_LIBRARIES := libc libcutils libcrypto libssl
 ifdef CONFIG_DRIVER_NL80211

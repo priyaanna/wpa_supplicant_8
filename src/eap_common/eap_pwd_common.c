@@ -75,8 +75,8 @@ void eap_pwd_kdf(u8 *key, int keylen, u8 *label, int labellen,
 
 	/* since we're expanding to a bit length, mask off the excess */
 	if (resultbitlen % 8) {
-		mask <<= (8 - (resultbitlen % 8));
-		result[resultbytelen - 1] &= mask;
+		mask >>= ((resultbytelen * 8) - resultbitlen);
+		result[0] &= mask;
 	}
 }
 
@@ -189,18 +189,6 @@ int compute_password_element(EAP_PWD_group *grp, u16 num,
 			    prfbuf, primebitlen);
 
 		BN_bin2bn(prfbuf, primebytelen, x_candidate);
-
-		/*
-		 * eap_pwd_kdf() returns a string of bits 0..primebitlen but
-		 * BN_bin2bn will treat that string of bits as a big endian
-		 * number. If the primebitlen is not an even multiple of 8
-		 * then excessive bits-- those _after_ primebitlen-- so now
-		 * we have to shift right the amount we masked off.
-		 */
-		if (primebitlen % 8)
-			BN_rshift(x_candidate, x_candidate,
-				  (8 - (primebitlen % 8)));
-
 		if (BN_ucmp(x_candidate, grp->prime) >= 0)
 			continue;
 
@@ -284,7 +272,6 @@ int compute_keys(EAP_PWD_group *grp, BN_CTX *bnctx, BIGNUM *k,
 	u8 mk[SHA256_DIGEST_LENGTH], *cruft;
 	u8 session_id[SHA256_DIGEST_LENGTH + 1];
 	u8 msk_emsk[EAP_MSK_LEN + EAP_EMSK_LEN];
-	int offset;
 
 	if ((cruft = os_malloc(BN_num_bytes(grp->prime))) == NULL)
 		return -1;
@@ -296,21 +283,16 @@ int compute_keys(EAP_PWD_group *grp, BN_CTX *bnctx, BIGNUM *k,
 	session_id[0] = EAP_TYPE_PWD;
 	H_Init(&ctx);
 	H_Update(&ctx, (u8 *)ciphersuite, sizeof(u32));
-	offset = BN_num_bytes(grp->order) - BN_num_bytes(peer_scalar);
-	os_memset(cruft, 0, BN_num_bytes(grp->prime));
-	BN_bn2bin(peer_scalar, cruft + offset);
+	BN_bn2bin(peer_scalar, cruft);
 	H_Update(&ctx, cruft, BN_num_bytes(grp->order));
-	offset = BN_num_bytes(grp->order) - BN_num_bytes(server_scalar);
-	os_memset(cruft, 0, BN_num_bytes(grp->prime));
-	BN_bn2bin(server_scalar, cruft + offset);
+	BN_bn2bin(server_scalar, cruft);
 	H_Update(&ctx, cruft, BN_num_bytes(grp->order));
 	H_Final(&ctx, &session_id[1]);
 
 	/* then compute MK = H(k | commit-peer | commit-server) */
 	H_Init(&ctx);
-	offset = BN_num_bytes(grp->prime) - BN_num_bytes(k);
 	os_memset(cruft, 0, BN_num_bytes(grp->prime));
-	BN_bn2bin(k, cruft + offset);
+	BN_bn2bin(k, cruft);
 	H_Update(&ctx, cruft, BN_num_bytes(grp->prime));
 	H_Update(&ctx, commit_peer, SHA256_DIGEST_LENGTH);
 	H_Update(&ctx, commit_server, SHA256_DIGEST_LENGTH);

@@ -1,6 +1,6 @@
 /*
  * hostapd / IEEE 802.1X-2004 Authenticator
- * Copyright (c) 2002-2012, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2002-2011, Jouni Malinen <j@w1.fi>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -20,13 +20,13 @@
 #include "crypto/crypto.h"
 #include "crypto/random.h"
 #include "common/ieee802_11_defs.h"
+#include "common/wpa_ctrl.h"
 #include "radius/radius.h"
 #include "radius/radius_client.h"
 #include "eap_server/eap.h"
 #include "eap_common/eap_wsc_common.h"
 #include "eapol_auth/eapol_auth_sm.h"
 #include "eapol_auth/eapol_auth_sm_i.h"
-#include "p2p/p2p.h"
 #include "hostapd.h"
 #include "accounting.h"
 #include "sta_info.h"
@@ -36,6 +36,9 @@
 #include "ap_config.h"
 #include "ap_drv_ops.h"
 #include "ieee802_1x.h"
+#ifdef ANDROID_BRCM_P2P_PATCH
+#include "p2p/p2p_i.h"
+#endif
 
 
 static void ieee802_1x_finished(struct hostapd_data *hapd,
@@ -84,16 +87,53 @@ void ieee802_1x_set_sta_authorized(struct hostapd_data *hapd,
 				   struct sta_info *sta, int authorized)
 {
 	int res;
+#ifdef ANDROID_BRCM_P2P_PATCH
+	u8 *dev_addr = NULL;
+#endif
 
 	if (sta->flags & WLAN_STA_PREAUTH)
 		return;
 
 	if (authorized) {
+		if (!ap_sta_is_authorized(sta)) {
+#if defined(ANDROID_BRCM_P2P_PATCH) && defined(CONFIG_P2P)
+			if((dev_addr = p2p_group_get_dev_addr(hapd->p2p_group, sta->addr)))
+				wpa_msg(hapd->msg_ctx, MSG_INFO,
+					AP_STA_CONNECTED MACSTR " dev_addr="MACSTR, MAC2STR(sta->addr), MAC2STR(dev_addr));
+			else
+#endif /*ANDROID_BRCM_P2P_PATCH*/
+				wpa_msg(hapd->msg_ctx, MSG_INFO,
+					AP_STA_CONNECTED MACSTR, MAC2STR(sta->addr));
+
+#ifdef ANDROID_BRCM_P2P_PATCH
+			/* Sending the event to parent is required as SSL listens on parent ctrl iface */
+			if(hapd->msg_ctx_parent) {
+				if(dev_addr)
+					wpa_msg(hapd->msg_ctx_parent, MSG_INFO,
+						AP_STA_CONNECTED MACSTR " dev_addr="MACSTR, MAC2STR(sta->addr), MAC2STR(dev_addr));
+				else
+					wpa_msg(hapd->msg_ctx_parent, MSG_INFO,
+						AP_STA_CONNECTED MACSTR , MAC2STR(sta->addr));
+			}
+#endif /* ANDROID_BRCM_P2P_PATCH */
+		}
+
 		ap_sta_set_authorized(hapd, sta, 1);
 		res = hostapd_set_authorized(hapd, sta, 1);
 		hostapd_logger(hapd, sta->addr, HOSTAPD_MODULE_IEEE8021X,
 			       HOSTAPD_LEVEL_DEBUG, "authorizing port");
 	} else {
+		if (ap_sta_is_authorized(sta) && (sta->flags & WLAN_STA_ASSOC)) {
+			wpa_msg(hapd->msg_ctx, MSG_INFO,
+				AP_STA_DISCONNECTED MACSTR,
+				MAC2STR(sta->addr));
+#ifdef ANDROID_BRCM_P2P_PATCH
+			if(hapd->msg_ctx_parent)
+				wpa_msg(hapd->msg_ctx_parent, MSG_INFO,
+					AP_STA_DISCONNECTED MACSTR,
+					MAC2STR(sta->addr));
+#endif /* ANDROID_BRCM_P2P_PATCH */
+		}
 		ap_sta_set_authorized(hapd, sta, 0);
 		res = hostapd_set_authorized(hapd, sta, 0);
 		hostapd_logger(hapd, sta->addr, HOSTAPD_MODULE_IEEE8021X,
@@ -682,8 +722,7 @@ void ieee802_1x_receive(struct hostapd_data *hapd, const u8 *sa, const u8 *buf,
 	wpa_printf(MSG_DEBUG, "IEEE 802.1X: %lu bytes from " MACSTR,
 		   (unsigned long) len, MAC2STR(sa));
 	sta = ap_get_sta(hapd, sa);
-	if (!sta || (!(sta->flags & (WLAN_STA_ASSOC | WLAN_STA_PREAUTH)) &&
-		     !(hapd->iface->drv_flags & WPA_DRIVER_FLAGS_WIRED))) {
+	if (!sta || !(sta->flags & (WLAN_STA_ASSOC | WLAN_STA_PREAUTH))) {
 		wpa_printf(MSG_DEBUG, "IEEE 802.1X data frame from not "
 			   "associated/Pre-authenticating STA");
 		if (sta && (sta->flags & WLAN_STA_ASSOC_REQ_OK)) {
@@ -757,24 +796,14 @@ void ieee802_1x_receive(struct hostapd_data *hapd, const u8 *sa, const u8 *buf,
 			return;
 
 #ifdef CONFIG_WPS
-		if (!hapd->conf->ieee802_1x) {
-			u32 wflags = sta->flags & (WLAN_STA_WPS |
-						   WLAN_STA_WPS2 |
-						   WLAN_STA_MAYBE_WPS);
-			if (wflags == WLAN_STA_MAYBE_WPS ||
-			    wflags == (WLAN_STA_WPS | WLAN_STA_MAYBE_WPS)) {
-				/*
-				 * Delay EAPOL frame transmission until a
-				 * possible WPS STA initiates the handshake
-				 * with EAPOL-Start. Only allow the wait to be
-				 * skipped if the STA is known to support WPS
-				 * 2.0.
-				 */
-				wpa_printf(MSG_DEBUG, "WPS: Do not start "
-					   "EAPOL until EAPOL-Start is "
-					   "received");
-				sta->eapol_sm->flags |= EAPOL_SM_WAIT_START;
-			}
+		if (!hapd->conf->ieee802_1x &&
+		    ((sta->flags & (WLAN_STA_WPS | WLAN_STA_MAYBE_WPS)) ==
+		     WLAN_STA_MAYBE_WPS)) {
+			/*
+			 * Delay EAPOL frame transmission until a possible WPS
+			 * STA initiates the handshake with EAPOL-Start.
+			 */
+			sta->eapol_sm->flags |= EAPOL_SM_WAIT_START;
 		}
 #endif /* CONFIG_WPS */
 
@@ -903,14 +932,11 @@ void ieee802_1x_new_station(struct hostapd_data *hapd, struct sta_info *sta)
 
 #ifdef CONFIG_WPS
 	sta->eapol_sm->flags &= ~EAPOL_SM_WAIT_START;
-	if (!hapd->conf->ieee802_1x && !(sta->flags & WLAN_STA_WPS2)) {
+	if (!hapd->conf->ieee802_1x && !(sta->flags & WLAN_STA_WPS)) {
 		/*
-		 * Delay EAPOL frame transmission until a possible WPS STA
-		 * initiates the handshake with EAPOL-Start. Only allow the
-		 * wait to be skipped if the STA is known to support WPS 2.0.
+		 * Delay EAPOL frame transmission until a possible WPS
+		 * initiates the handshake with EAPOL-Start.
 		 */
-		wpa_printf(MSG_DEBUG, "WPS: Do not start EAPOL until "
-			   "EAPOL-Start is received");
 		sta->eapol_sm->flags |= EAPOL_SM_WAIT_START;
 	}
 #endif /* CONFIG_WPS */
@@ -929,7 +955,6 @@ void ieee802_1x_new_station(struct hostapd_data *hapd, struct sta_info *sta)
 		sta->eapol_sm->auth_pae_state = AUTH_PAE_AUTHENTICATING;
 		sta->eapol_sm->be_auth_state = BE_AUTH_SUCCESS;
 		sta->eapol_sm->authSuccess = TRUE;
-		sta->eapol_sm->authFail = FALSE;
 		if (sta->eapol_sm->eap)
 			eap_sm_notify_cached(sta->eapol_sm->eap);
 		/* TODO: get vlan_id from R0KH using RRB message */
@@ -951,7 +976,6 @@ void ieee802_1x_new_station(struct hostapd_data *hapd, struct sta_info *sta)
 		sta->eapol_sm->auth_pae_state = AUTH_PAE_AUTHENTICATING;
 		sta->eapol_sm->be_auth_state = BE_AUTH_SUCCESS;
 		sta->eapol_sm->authSuccess = TRUE;
-		sta->eapol_sm->authFail = FALSE;
 		if (sta->eapol_sm->eap)
 			eap_sm_notify_cached(sta->eapol_sm->eap);
 		old_vlanid = sta->vlan_id;
@@ -1430,9 +1454,6 @@ void ieee802_1x_abort_auth(struct hostapd_data *hapd, struct sta_info *sta)
 		 * request and we cannot continue EAP processing (EAP-Failure
 		 * could only be sent if the EAP peer actually replied).
 		 */
-		wpa_dbg(hapd->msg_ctx, MSG_DEBUG, "EAP Timeout, STA " MACSTR,
-			MAC2STR(sta->addr));
-
 		sm->eap_if->portEnabled = FALSE;
 		ap_sta_disconnect(hapd, sta, sta->addr,
 				  WLAN_REASON_PREV_AUTH_NOT_VALID);
@@ -1585,7 +1606,7 @@ static int ieee802_1x_get_eap_user(void *ctx, const u8 *identity,
 {
 	struct hostapd_data *hapd = ctx;
 	const struct hostapd_eap_user *eap_user;
-	int i;
+	int i, count;
 
 	eap_user = hostapd_get_eap_user(hapd->conf, identity,
 					identity_len, phase2);
@@ -1594,7 +1615,10 @@ static int ieee802_1x_get_eap_user(void *ctx, const u8 *identity,
 
 	os_memset(user, 0, sizeof(*user));
 	user->phase2 = phase2;
-	for (i = 0; i < EAP_MAX_METHODS; i++) {
+	count = EAP_USER_MAX_METHODS;
+	if (count > EAP_MAX_METHODS)
+		count = EAP_MAX_METHODS;
+	for (i = 0; i < count; i++) {
 		user->methods[i].vendor = eap_user->methods[i].vendor;
 		user->methods[i].method = eap_user->methods[i].method;
 	}
@@ -1606,7 +1630,6 @@ static int ieee802_1x_get_eap_user(void *ctx, const u8 *identity,
 		os_memcpy(user->password, eap_user->password,
 			  eap_user->password_len);
 		user->password_len = eap_user->password_len;
-		user->password_hash = eap_user->password_hash;
 	}
 	user->force_version = eap_user->force_version;
 	user->ttls_auth = eap_user->ttls_auth;
@@ -1783,13 +1806,15 @@ int ieee802_1x_tx_status(struct hostapd_data *hapd, struct sta_info *sta,
 			 const u8 *buf, size_t len, int ack)
 {
 	struct ieee80211_hdr *hdr;
+	struct ieee802_1x_hdr *xhdr;
+	struct ieee802_1x_eapol_key *key;
 	u8 *pos;
 	const unsigned char rfc1042_hdr[ETH_ALEN] =
 		{ 0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00 };
 
 	if (sta == NULL)
 		return -1;
-	if (len < sizeof(*hdr) + sizeof(rfc1042_hdr) + 2)
+	if (len < sizeof(*hdr) + sizeof(rfc1042_hdr) + 2 + sizeof(*xhdr))
 		return 0;
 
 	hdr = (struct ieee80211_hdr *) buf;
@@ -1801,30 +1826,16 @@ int ieee802_1x_tx_status(struct hostapd_data *hapd, struct sta_info *sta,
 		return 0;
 	pos += 2;
 
-	return ieee802_1x_eapol_tx_status(hapd, sta, pos, buf + len - pos,
-					  ack);
-}
+	xhdr = (struct ieee802_1x_hdr *) pos;
+	pos += sizeof(*xhdr);
 
-
-int ieee802_1x_eapol_tx_status(struct hostapd_data *hapd, struct sta_info *sta,
-			       const u8 *buf, int len, int ack)
-{
-	const struct ieee802_1x_hdr *xhdr =
-		(const struct ieee802_1x_hdr *) buf;
-	const u8 *pos = buf + sizeof(*xhdr);
-	struct ieee802_1x_eapol_key *key;
-
-	if (len < (int) sizeof(*xhdr))
-		return 0;
 	wpa_printf(MSG_DEBUG, "IEEE 802.1X: " MACSTR " TX status - version=%d "
 		   "type=%d length=%d - ack=%d",
 		   MAC2STR(sta->addr), xhdr->version, xhdr->type,
 		   be_to_host16(xhdr->length), ack);
 
-	if (xhdr->type != IEEE802_1X_TYPE_EAPOL_KEY)
-		return 0;
-
-	if (pos + sizeof(struct wpa_eapol_key) <= buf + len) {
+	if (xhdr->type == IEEE802_1X_TYPE_EAPOL_KEY &&
+	    pos + sizeof(struct wpa_eapol_key) <= buf + len) {
 		const struct wpa_eapol_key *wpa;
 		wpa = (const struct wpa_eapol_key *) pos;
 		if (wpa->type == EAPOL_KEY_TYPE_RSN ||
@@ -1835,10 +1846,11 @@ int ieee802_1x_eapol_tx_status(struct hostapd_data *hapd, struct sta_info *sta,
 
 	/* EAPOL EAP-Packet packets are eventually re-sent by either Supplicant
 	 * or Authenticator state machines, but EAPOL-Key packets are not
-	 * retransmitted in case of failure. Try to re-send failed EAPOL-Key
+	 * retransmitted in case of failure. Try to re-sent failed EAPOL-Key
 	 * packets couple of times because otherwise STA keys become
 	 * unsynchronized with AP. */
-	if (!ack && pos + sizeof(*key) <= buf + len) {
+	if (xhdr->type == IEEE802_1X_TYPE_EAPOL_KEY && !ack &&
+	    pos + sizeof(*key) <= buf + len) {
 		key = (struct ieee802_1x_eapol_key *) pos;
 		hostapd_logger(hapd, sta->addr, HOSTAPD_MODULE_IEEE8021X,
 			       HOSTAPD_LEVEL_DEBUG, "did not Ack EAPOL-Key "
@@ -1942,7 +1954,6 @@ int ieee802_1x_get_mib_sta(struct hostapd_data *hapd, struct sta_info *sta,
 {
 	int len = 0, ret;
 	struct eapol_state_machine *sm = sta->eapol_sm;
-	struct os_time t;
 
 	if (sm == NULL)
 		return 0;
@@ -2057,7 +2068,6 @@ int ieee802_1x_get_mib_sta(struct hostapd_data *hapd, struct sta_info *sta,
 	len += ret;
 
 	/* dot1xAuthSessionStatsTable */
-	os_get_time(&t);
 	ret = os_snprintf(buf + len, buflen - len,
 			  /* TODO: dot1xAuthSessionOctetsRx */
 			  /* TODO: dot1xAuthSessionOctetsTx */
@@ -2072,7 +2082,8 @@ int ieee802_1x_get_mib_sta(struct hostapd_data *hapd, struct sta_info *sta,
 			  (wpa_key_mgmt_wpa_ieee8021x(
 				   wpa_auth_sta_key_mgmt(sta->wpa_sm))) ?
 			  1 : 2,
-			  (unsigned int) (t.sec - sta->acct_session_start),
+			  (unsigned int) (time(NULL) -
+					  sta->acct_session_start),
 			  sm->identity);
 	if (ret < 0 || (size_t) ret >= buflen - len)
 		return len;
@@ -2099,25 +2110,22 @@ static void ieee802_1x_finished(struct hostapd_data *hapd,
 			       "Added PMKSA cache entry (IEEE 802.1X)");
 	}
 
-	if (!success) {
+#ifdef CONFIG_WPS
+	if (!success && (sta->flags & WLAN_STA_WPS)) {
 		/*
 		 * Many devices require deauthentication after WPS provisioning
 		 * and some may not be be able to do that themselves, so
-		 * disconnect the client here. In addition, this may also
-		 * benefit IEEE 802.1X/EAPOL authentication cases, too since
-		 * the EAPOL PAE state machine would remain in HELD state for
-		 * considerable amount of time and some EAP methods, like
-		 * EAP-FAST with anonymous provisioning, may require another
-		 * EAPOL authentication to be started to complete connection.
+		 * disconnect the client here.
 		 */
-		wpa_dbg(hapd->msg_ctx, MSG_DEBUG, "IEEE 802.1X: Force "
-			"disconnection after EAP-Failure");
+		wpa_printf(MSG_DEBUG, "WPS: Force disconnection after "
+			   "EAP-Failure");
 		/* Add a small sleep to increase likelihood of previously
 		 * requested EAP-Failure TX getting out before this should the
 		 * driver reorder operations.
 		 */
 		os_sleep(0, 10000);
 		ap_sta_disconnect(hapd, sta, sta->addr,
-				  WLAN_REASON_IEEE_802_1X_AUTH_FAILED);
+				  WLAN_REASON_PREV_AUTH_NOT_VALID);
 	}
+#endif /* CONFIG_WPS */
 }

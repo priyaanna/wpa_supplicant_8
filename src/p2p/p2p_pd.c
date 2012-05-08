@@ -19,6 +19,7 @@
 #include "wps/wps_defs.h"
 #include "p2p_i.h"
 #include "p2p.h"
+#include "wfd/wfd_i.h"
 
 
 /*
@@ -70,6 +71,9 @@ static struct wpabuf * p2p_build_prov_disc_req(struct p2p_data *p2p,
 
 	/* WPS IE with Config Methods attribute */
 	p2p_build_wps_ie_config_methods(buf, config_methods);
+#ifdef CONFIG_WFD
+	wfd_build_prov_disc_req_ie(p2p->wfd, buf);
+#endif /* CONFIG_WFD */
 
 	return buf;
 }
@@ -89,6 +93,9 @@ static struct wpabuf * p2p_build_prov_disc_resp(struct p2p_data *p2p,
 
 	/* WPS IE with Config Methods attribute */
 	p2p_build_wps_ie_config_methods(buf, config_methods);
+#ifdef CONFIG_WFD
+	wfd_build_prov_disc_resp_ie(p2p->wfd, buf);
+#endif /* CONFIG_WFD */
 
 	return buf;
 }
@@ -112,7 +119,7 @@ void p2p_process_prov_disc_req(struct p2p_data *p2p, const u8 *sa,
 		MAC2STR(sa), msg.wps_config_methods, rx_freq);
 
 	dev = p2p_get_device(p2p, sa);
-	if (dev == NULL || (dev->flags & P2P_DEV_PROBE_REQ_ONLY)) {
+	if (dev == NULL || !(dev->flags & P2P_DEV_PROBE_REQ_ONLY)) {
 		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG,
 			"P2P: Provision Discovery Request from "
 			"unknown peer " MACSTR, MAC2STR(sa));
@@ -191,8 +198,8 @@ out:
 					msg.device_name, msg.config_methods,
 					msg.capability ? msg.capability[0] : 0,
 					msg.capability ? msg.capability[1] :
-					0,
-					msg.group_id, msg.group_id_len);
+					0);
+
 	}
 	p2p_parse_free(&msg);
 }
@@ -209,14 +216,14 @@ void p2p_process_prov_disc_resp(struct p2p_data *p2p, const u8 *sa,
 		return;
 
 	wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG,
-		"P2P: Received Provision Discovery Response from " MACSTR
+		"P2P: Received Provisioning Discovery Response from " MACSTR
 		" with config methods 0x%x",
 		MAC2STR(sa), msg.wps_config_methods);
 
 	dev = p2p_get_device(p2p, sa);
 	if (dev == NULL || !dev->req_config_methods) {
 		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG,
-			"P2P: Ignore Provision Discovery Response from "
+			"P2P: Ignore Provisioning Discovery Response from "
 			MACSTR " with no pending request", MAC2STR(sa));
 		p2p_parse_free(&msg);
 		return;
@@ -229,7 +236,7 @@ void p2p_process_prov_disc_resp(struct p2p_data *p2p, const u8 *sa,
 
 	if (dev->dialog_token != msg.dialog_token) {
 		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG,
-			"P2P: Ignore Provision Discovery Response with "
+			"P2P: Ignore Provisioning Discovery Response with "
 			"unexpected Dialog Token %u (expected %u)",
 			msg.dialog_token, dev->dialog_token);
 		p2p_parse_free(&msg);
@@ -246,7 +253,7 @@ void p2p_process_prov_disc_resp(struct p2p_data *p2p, const u8 *sa,
 
 	if (msg.wps_config_methods != dev->req_config_methods) {
 		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG, "P2P: Peer rejected "
-			"our Provision Discovery Request");
+			"our Provisioning Discovery Request");
 		if (p2p->cfg->prov_disc_fail)
 			p2p->cfg->prov_disc_fail(p2p->cfg->cb_ctx, sa,
 						 P2P_PROV_DISC_REJECTED);
@@ -267,10 +274,6 @@ void p2p_process_prov_disc_resp(struct p2p_data *p2p, const u8 *sa,
 			MAC2STR(sa));
 		dev->flags |= P2P_DEV_PD_PEER_KEYPAD;
 	}
-
-	/* Store the provisioning info */
-	dev->wps_prov_info = msg.wps_config_methods;
-
 	p2p_parse_free(&msg);
 
 out:
@@ -283,16 +286,25 @@ out:
 
 
 int p2p_send_prov_disc_req(struct p2p_data *p2p, struct p2p_device *dev,
-			   int join, int force_freq)
+			   int join)
 {
 	struct wpabuf *req;
 	int freq;
+#ifdef ANDROID_BRCM_P2P_PATCH
+	if(dev->go_state == REMOTE_GO) {
+		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG,
+			"P2P: GO Sending it to oper_freq %d", dev->oper_freq);
+		freq= dev->oper_freq;
+	}
+	else {
+		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG,
+			"P2P: NOT GO oper_freq %d listen_freq %d", dev->oper_freq, dev->listen_freq);
+		freq = dev->listen_freq > 0 ? dev->listen_freq : dev->oper_freq;
+	}
+#else
+	freq = dev->listen_freq > 0 ? dev->listen_freq : dev->oper_freq;
+#endif
 
-	if (force_freq > 0)
-		freq = force_freq;
-	else
-		freq = dev->listen_freq > 0 ? dev->listen_freq :
-			dev->oper_freq;
 	if (freq <= 0) {
 		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG,
 			"P2P: No Listen/Operating frequency known for the "
@@ -340,7 +352,7 @@ int p2p_send_prov_disc_req(struct p2p_data *p2p, struct p2p_device *dev,
 
 
 int p2p_prov_disc_req(struct p2p_data *p2p, const u8 *peer_addr,
-		      u16 config_methods, int join, int force_freq)
+		      u16 config_methods, int join)
 {
 	struct p2p_device *dev;
 
@@ -360,17 +372,15 @@ int p2p_prov_disc_req(struct p2p_data *p2p, const u8 *peer_addr,
 	if (config_methods == 0)
 		return -1;
 
-	/* Reset provisioning info */
-	dev->wps_prov_info = 0;
-
 	dev->req_config_methods = config_methods;
 	if (join)
 		dev->flags |= P2P_DEV_PD_FOR_JOIN;
 	else
 		dev->flags &= ~P2P_DEV_PD_FOR_JOIN;
 
-	if (p2p->state != P2P_IDLE && p2p->state != P2P_SEARCH &&
-	    p2p->state != P2P_LISTEN_ONLY) {
+	if (p2p->go_neg_peer ||
+	    (p2p->state != P2P_IDLE && p2p->state != P2P_SEARCH &&
+	     p2p->state != P2P_LISTEN_ONLY)) {
 		wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG, "P2P: Busy with other "
 			"operations; postpone Provision Discovery Request "
 			"with " MACSTR " (config methods 0x%x)",
@@ -388,26 +398,12 @@ int p2p_prov_disc_req(struct p2p_data *p2p, const u8 *peer_addr,
 	if (p2p->user_initiated_pd && p2p->state == P2P_IDLE)
 		p2p->pd_retries = MAX_PROV_DISC_REQ_RETRIES;
 
-	return p2p_send_prov_disc_req(p2p, dev, join, force_freq);
+	return p2p_send_prov_disc_req(p2p, dev, join);
 }
 
 
 void p2p_reset_pending_pd(struct p2p_data *p2p)
 {
-	struct p2p_device *dev;
-
-	dl_list_for_each(dev, &p2p->devices, struct p2p_device, list) {
-		if (os_memcmp(p2p->pending_pd_devaddr,
-			      dev->info.p2p_device_addr, ETH_ALEN))
-			continue;
-		if (!dev->req_config_methods)
-			continue;
-		if (dev->flags & P2P_DEV_PD_FOR_JOIN)
-			continue;
-		/* Reset the config methods of the device */
-		dev->req_config_methods = 0;
-	}
-
 	p2p->user_initiated_pd = 0;
 	os_memset(p2p->pending_pd_devaddr, 0, ETH_ALEN);
 	p2p->pd_retries = 0;

@@ -24,18 +24,6 @@
 #include "ibss_rsn.h"
 
 
-static struct ibss_rsn_peer * ibss_rsn_get_peer(struct ibss_rsn *ibss_rsn,
-						const u8 *addr)
-{
-	struct ibss_rsn_peer *peer;
-
-	for (peer = ibss_rsn->peers; peer; peer = peer->next)
-		if (os_memcmp(addr, peer->addr, ETH_ALEN) == 0)
-			break;
-	return peer;
-}
-
-
 static void ibss_rsn_free(struct ibss_rsn_peer *peer)
 {
 	wpa_auth_sta_deinit(peer->auth);
@@ -180,8 +168,8 @@ static void supp_deauthenticate(void * ctx, int reason_code)
 }
 
 
-static int ibss_rsn_supp_init(struct ibss_rsn_peer *peer, const u8 *own_addr,
-			      const u8 *psk)
+int ibss_rsn_supp_init(struct ibss_rsn_peer *peer, const u8 *own_addr,
+		       const u8 *psk)
 {
 	struct wpa_sm_ctx *ctx = os_zalloc(sizeof(*ctx));
 	if (ctx == NULL)
@@ -351,8 +339,6 @@ static int ibss_rsn_auth_init_group(struct ibss_rsn *ibss_rsn,
 		return -1;
 	}
 
-	wpa_init_keys(ibss_rsn->auth_group);
-
 	return 0;
 }
 
@@ -395,11 +381,13 @@ int ibss_rsn_start(struct ibss_rsn *ibss_rsn, const u8 *addr)
 	if (ibss_rsn == NULL)
 		return -1;
 
-	if (ibss_rsn_get_peer(ibss_rsn, addr)) {
-		wpa_printf(MSG_DEBUG, "RSN: IBSS Authenticator and Supplicant "
-			   "for peer " MACSTR " already running",
-			   MAC2STR(addr));
-		return 0;
+	for (peer = ibss_rsn->peers; peer; peer = peer->next) {
+		if (os_memcmp(addr, peer->addr, ETH_ALEN) == 0) {
+			wpa_printf(MSG_DEBUG, "RSN: IBSS Authenticator and "
+				   "Supplicant for peer " MACSTR " already "
+				   "running", MAC2STR(addr));
+			return 0;
+		}
 	}
 
 	wpa_printf(MSG_DEBUG, "RSN: Starting IBSS Authenticator and "
@@ -587,9 +575,11 @@ int ibss_rsn_rx_eapol(struct ibss_rsn *ibss_rsn, const u8 *src_addr,
 	if (ibss_rsn == NULL)
 		return -1;
 
-	peer = ibss_rsn_get_peer(ibss_rsn, src_addr);
-	if (peer)
-		return ibss_rsn_process_rx_eapol(ibss_rsn, peer, buf, len);
+	for (peer = ibss_rsn->peers; peer; peer = peer->next) {
+		if (os_memcmp(src_addr, peer->addr, ETH_ALEN) == 0)
+			return ibss_rsn_process_rx_eapol(ibss_rsn, peer,
+							 buf, len);
+	}
 
 	if (ibss_rsn_eapol_dst_supp(buf, len) > 0) {
 		/*
