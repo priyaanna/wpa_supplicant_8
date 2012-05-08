@@ -26,23 +26,20 @@ endif
 
 ifeq ($(WPA_BUILD_SUPPLICANT),true)
 
-include $(LOCAL_PATH)/android.config
+include $(LOCAL_PATH)/.config
 
 # To ignore possible wrong network configurations
 L_CFLAGS = -DWPA_IGNORE_CONFIG_ERRORS
 
-L_CFLAGS += -DVERSION_STR_POSTFIX=\"-$(shell cd $(LOCAL_PATH) ; git describe)\"
-
 # Set Android log name
 L_CFLAGS += -DANDROID_LOG_NAME=\"wpa_supplicant\"
 
-# Disable roaming in wpa_supplicant
-ifdef CONFIG_NO_ROAMING
-L_CFLAGS += -DCONFIG_NO_ROAMING
-endif
-
 ifeq ($(BOARD_WLAN_DEVICE), bcmdhd)
 L_CFLAGS += -DANDROID_BRCM_P2P_PATCH
+endif
+
+ifdef CONFIG_ROAMING
+L_CFLAGS += -DCONFIG_ROAMING
 endif
 
 # Use Android specific directory for control interface sockets

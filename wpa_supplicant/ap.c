@@ -3,8 +3,14 @@
  * Copyright (c) 2003-2009, Jouni Malinen <j@w1.fi>
  * Copyright (c) 2009, Atheros Communications
  *
- * This software may be distributed under the terms of the BSD license.
- * See README for more details.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * Alternatively, this software may be distributed under the terms of BSD
+ * license.
+ *
+ * See README and COPYING for more details.
  */
 
 #include "utils/includes.h"
@@ -17,9 +23,9 @@
 #include "ap/hostapd.h"
 #include "ap/ap_config.h"
 #include "ap/ap_drv_ops.h"
-#ifdef NEED_AP_MLME
+#if defined(NEED_AP_MLME) || defined(ANDROID_BRCM_P2P_PATCH)
 #include "ap/ieee802_11.h"
-#endif /* NEED_AP_MLME */
+#endif /* NEED_AP_MLME || ANDROID_BRCM_P2P_PATCH */
 #include "ap/beacon.h"
 #include "ap/ieee802_1x.h"
 #include "ap/wps_hostapd.h"
@@ -145,8 +151,6 @@ static int wpa_supplicant_conf_ap(struct wpa_supplicant *wpa_s,
 	bss->ssid.ssid_len = ssid->ssid_len;
 	bss->ssid.ssid_set = 1;
 
-	bss->ignore_broadcast_ssid = ssid->ignore_broadcast_ssid;
-
 	if (ssid->auth_alg)
 		bss->auth_algs = ssid->auth_alg;
 
@@ -240,10 +244,7 @@ static int wpa_supplicant_conf_ap(struct wpa_supplicant *wpa_s,
 			      * configuration */
 #endif /* CONFIG_WPS2 */
 	bss->eap_server = 1;
-
-	if (!ssid->ignore_broadcast_ssid)
-		bss->wps_state = 2;
-
+	bss->wps_state = 2;
 	bss->ap_setup_locked = 2;
 	if (wpa_s->conf->config_methods)
 		bss->config_methods = os_strdup(wpa_s->conf->config_methods);
@@ -545,6 +546,14 @@ int wpa_supplicant_create_ap(struct wpa_supplicant *wpa_s,
 		return -1;
 	}
 
+#ifdef ANDROID_BRCM_P2P_PATCH
+	if (wpa_drv_probe_req_report(wpa_s, 1) < 0) {
+		wpa_printf(MSG_DEBUG, "P2P: Failed to request the driver to "
+			   "report received Probe Request frames");
+		return -1;
+	}
+#endif /* ANDROID_BRCM_P2P_PATCH */
+
 	return 0;
 }
 
@@ -614,7 +623,7 @@ void ap_rx_from_unknown_sta(void *ctx, const u8 *addr, int wds)
 
 void ap_mgmt_rx(void *ctx, struct rx_mgmt *rx_mgmt)
 {
-#ifdef NEED_AP_MLME
+#if defined(NEED_AP_MLME) || defined(ANDROID_BRCM_P2P_PATCH)
 	struct wpa_supplicant *wpa_s = ctx;
 	struct hostapd_frame_info fi;
 	os_memset(&fi, 0, sizeof(fi));
@@ -622,7 +631,7 @@ void ap_mgmt_rx(void *ctx, struct rx_mgmt *rx_mgmt)
 	fi.ssi_signal = rx_mgmt->ssi_signal;
 	ieee802_11_mgmt(wpa_s->ap_iface->bss[0], rx_mgmt->frame,
 			rx_mgmt->frame_len, &fi);
-#endif /* NEED_AP_MLME */
+#endif /* NEED_AP_MLME || ANDROID_BRCM_P2P_PATCH */
 }
 
 
@@ -870,26 +879,6 @@ int ap_ctrl_iface_sta_next(struct wpa_supplicant *wpa_s, const char *txtaddr,
 		return -1;
 	return hostapd_ctrl_iface_sta_next(wpa_s->ap_iface->bss[0], txtaddr,
 					   buf, buflen);
-}
-
-
-int ap_ctrl_iface_sta_disassociate(struct wpa_supplicant *wpa_s,
-				   const char *txtaddr)
-{
-	if (wpa_s->ap_iface == NULL)
-		return -1;
-	return hostapd_ctrl_iface_disassociate(wpa_s->ap_iface->bss[0],
-					       txtaddr);
-}
-
-
-int ap_ctrl_iface_sta_deauthenticate(struct wpa_supplicant *wpa_s,
-				     const char *txtaddr)
-{
-	if (wpa_s->ap_iface == NULL)
-		return -1;
-	return hostapd_ctrl_iface_deauthenticate(wpa_s->ap_iface->bss[0],
-						 txtaddr);
 }
 
 

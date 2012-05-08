@@ -2,8 +2,14 @@
  * hostapd - WPA/RSN IE and KDE definitions
  * Copyright (c) 2004-2008, Jouni Malinen <j@w1.fi>
  *
- * This software may be distributed under the terms of the BSD license.
- * See README for more details.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * Alternatively, this software may be distributed under the terms of BSD
+ * license.
+ *
+ * See README and COPYING for more details.
  */
 
 #include "utils/includes.h"
@@ -247,10 +253,19 @@ int wpa_write_rsn_ie(struct wpa_auth_config *conf, u8 *buf, size_t len,
 		capab |= WPA_CAPABILITY_PREAUTH;
 	if (conf->peerkey)
 		capab |= WPA_CAPABILITY_PEERKEY_ENABLED;
+#ifdef ANDROID_BRCM_P2P_PATCH
+	/* WAR: We should make an get_wpa_rsnie_cap() to get the cap of peer
+	 * supp. Temporally we force tp set replay counter tp 0x3
+	 * as if WMM is enabled in all of supp device.
+	 */
+	capab |= (RSN_NUM_REPLAY_COUNTERS_16 << 2);
+#else /* ANDROID_BRCM_P2P_PATCH */
 	if (conf->wmm_enabled) {
 		/* 4 PTKSA replay counters when using WMM */
 		capab |= (RSN_NUM_REPLAY_COUNTERS_16 << 2);
 	}
+#endif /* ANDROID_BRCM_P2P_PATCH */
+
 #ifdef CONFIG_IEEE80211W
 	if (conf->ieee80211w != NO_MGMT_FRAME_PROTECTION) {
 		capab |= WPA_CAPABILITY_MFPC;

@@ -2,8 +2,14 @@
  * wpa_supplicant - P2P
  * Copyright (c) 2009-2010, Atheros Communications
  *
- * This software may be distributed under the terms of the BSD license.
- * See README for more details.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * Alternatively, this software may be distributed under the terms of BSD
+ * license.
+ *
+ * See README and COPYING for more details.
  */
 
 #ifndef P2P_SUPPLICANT_H
@@ -105,6 +111,10 @@ int wpas_p2p_ext_listen(struct wpa_supplicant *wpa_s, unsigned int period,
 			unsigned int interval);
 void wpas_p2p_deauth_notif(struct wpa_supplicant *wpa_s, const u8 *bssid,
 			   u16 reason_code, const u8 *ie, size_t ie_len);
+#ifdef ANDROID_BRCM_P2P_PATCH
+int wpas_drv_set_p2p_powersave(struct wpa_supplicant *wpa_s, int legacy_ps,
+			       int opp_ps, int ctwindow);
+#endif /* ANDROID_BRCM_P2P_PATCH */
 void wpas_p2p_disassoc_notif(struct wpa_supplicant *wpa_s, const u8 *bssid,
 			     u16 reason_code, const u8 *ie, size_t ie_len);
 void wpas_p2p_update_config(struct wpa_supplicant *wpa_s);

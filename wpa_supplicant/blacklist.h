@@ -2,8 +2,14 @@
  * wpa_supplicant - Temporary BSSID blacklist
  * Copyright (c) 2003-2007, Jouni Malinen <j@w1.fi>
  *
- * This software may be distributed under the terms of the BSD license.
- * See README for more details.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * Alternatively, this software may be distributed under the terms of BSD
+ * license.
+ *
+ * See README and COPYING for more details.
  */
 
 #ifndef BLACKLIST_H
@@ -13,7 +19,6 @@ struct wpa_blacklist {
 	struct wpa_blacklist *next;
 	u8 bssid[ETH_ALEN];
 	int count;
-	struct os_time last_add;
 };
 
 struct wpa_blacklist * wpa_blacklist_get(struct wpa_supplicant *wpa_s,

@@ -2,8 +2,14 @@
  * Common driver-related functions
  * Copyright (c) 2003-2011, Jouni Malinen <j@w1.fi>
  *
- * This software may be distributed under the terms of the BSD license.
- * See README for more details.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * Alternatively, this software may be distributed under the terms of BSD
+ * license.
+ *
+ * See README and COPYING for more details.
  */
 
 #include "includes.h"
@@ -27,7 +33,6 @@ void wpa_scan_results_free(struct wpa_scan_results *res)
 const char * event_to_string(enum wpa_event_type event)
 {
 #define E2S(n) case EVENT_ ## n: return #n
-
 	switch (event) {
 	E2S(ASSOC);
 	E2S(DISASSOC);
@@ -80,7 +85,6 @@ const char * event_to_string(enum wpa_event_type event)
 	E2S(EAPOL_TX_STATUS);
 	E2S(ROAMING_ENABLED);
 	E2S(ROAMING_DISABLED);
-	E2S(START_ROAMING);
 	}
 
 	return "UNKNOWN";

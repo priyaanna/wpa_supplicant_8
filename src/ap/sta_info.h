@@ -2,8 +2,14 @@
  * hostapd / Station table
  * Copyright (c) 2002-2011, Jouni Malinen <j@w1.fi>
  *
- * This software may be distributed under the terms of the BSD license.
- * See README for more details.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * Alternatively, this software may be distributed under the terms of BSD
+ * license.
+ *
+ * See README and COPYING for more details.
  */
 
 #ifndef STA_INFO_H
@@ -27,7 +33,6 @@
 #define WLAN_STA_WDS BIT(14)
 #define WLAN_STA_ASSOC_REQ_OK BIT(15)
 #define WLAN_STA_WPS2 BIT(16)
-#define WLAN_STA_GAS BIT(17)
 #define WLAN_STA_PENDING_DISASSOC_CB BIT(29)
 #define WLAN_STA_PENDING_DEAUTH_CB BIT(30)
 #define WLAN_STA_NONERP BIT(31)
@@ -107,12 +112,6 @@ struct sta_info {
 				* transaction identifiers */
 	struct os_time sa_query_start;
 #endif /* CONFIG_IEEE80211W */
-
-#ifdef CONFIG_INTERWORKING
-#define GAS_DIALOG_MAX 8 /* Max concurrent dialog number */
-	struct gas_dialog_info *gas_dialog;
-	u8 gas_dialog_next;
-#endif /* CONFIG_INTERWORKING */
 
 	struct wpabuf *wps_ie; /* WPS IE from (Re)Association Request */
 	struct wpabuf *p2p_ie; /* P2P IE from (Re)Association Request */

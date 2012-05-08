@@ -2,8 +2,14 @@
  * Wi-Fi Direct - P2P group operations
  * Copyright (c) 2009-2010, Atheros Communications
  *
- * This software may be distributed under the terms of the BSD license.
- * See README for more details.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * Alternatively, this software may be distributed under the terms of BSD
+ * license.
+ *
+ * See README and COPYING for more details.
  */
 
 #include "includes.h"
@@ -688,9 +694,11 @@ u8 p2p_group_presence_req(struct p2p_group *group,
 		wpa_hexdump(MSG_DEBUG, "P2P: Current NoA", curr_noa,
 			    curr_noa_len);
 
+#ifndef ANDROID_BRCM_P2P_PATCH
 	/* TODO: properly process request and store copy */
 	if (curr_noa_len > 0 || curr_noa_len == -1)
 		return P2P_SC_FAIL_UNABLE_TO_ACCOMMODATE;
+#endif /* ANDROID_BRCM_P2P_PATCH */
 
 	return P2P_SC_SUCCESS;
 }

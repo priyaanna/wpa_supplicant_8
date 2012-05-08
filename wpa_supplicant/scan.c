@@ -2,8 +2,14 @@
  * WPA Supplicant - Scanning
  * Copyright (c) 2003-2010, Jouni Malinen <j@w1.fi>
  *
- * This software may be distributed under the terms of the BSD license.
- * See README for more details.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * Alternatively, this software may be distributed under the terms of BSD
+ * license.
+ *
+ * See README and COPYING for more details.
  */
 
 #include "utils/includes.h"
@@ -388,9 +394,7 @@ wpa_supplicant_extra_ies(struct wpa_supplicant *wpa_s,
 
 	if (wps) {
 		struct wpabuf *wps_ie;
-		wps_ie = wps_build_probe_req_ie(wps == 2 ? DEV_PW_PUSHBUTTON :
-						DEV_PW_DEFAULT,
-						&wpa_s->wps->dev,
+		wps_ie = wps_build_probe_req_ie(wps == 2, &wpa_s->wps->dev,
 						wpa_s->wps->uuid, req_type,
 						0, NULL);
 		if (wps_ie) {
@@ -411,63 +415,6 @@ wpa_supplicant_extra_ies(struct wpa_supplicant *wpa_s,
 #endif /* CONFIG_WPS */
 
 	return extra_ie;
-}
-
-
-static struct hostapd_hw_modes * get_mode(struct hostapd_hw_modes *modes,
-					  u16 num_modes,
-					  enum hostapd_hw_mode mode)
-{
-	u16 i;
-
-	for (i = 0; i < num_modes; i++) {
-		if (modes[i].mode == mode)
-			return &modes[i];
-	}
-
-	return NULL;
-}
-
-
-static void wpa_setband_scan_freqs_list(struct wpa_supplicant *wpa_s,
-					enum hostapd_hw_mode band,
-					struct wpa_driver_scan_params *params)
-{
-	/* Include only supported channels for the specified band */
-	struct hostapd_hw_modes *mode;
-	int count, i;
-
-	mode = get_mode(wpa_s->hw.modes, wpa_s->hw.num_modes, band);
-	if (mode == NULL) {
-		/* No channels supported in this band - use empty list */
-		params->freqs = os_zalloc(sizeof(int));
-		return;
-	}
-
-	params->freqs = os_zalloc((mode->num_channels + 1) * sizeof(int));
-	if (params->freqs == NULL)
-		return;
-	for (count = 0, i = 0; i < mode->num_channels; i++) {
-		if (mode->channels[i].flag & HOSTAPD_CHAN_DISABLED)
-			continue;
-		params->freqs[count++] = mode->channels[i].freq;
-	}
-}
-
-
-static void wpa_setband_scan_freqs(struct wpa_supplicant *wpa_s,
-				   struct wpa_driver_scan_params *params)
-{
-	if (wpa_s->hw.modes == NULL)
-		return; /* unknown what channels the driver supports */
-	if (params->freqs)
-		return; /* already using a limited channel set */
-	if (wpa_s->setband == WPA_SETBAND_5G)
-		wpa_setband_scan_freqs_list(wpa_s, HOSTAPD_MODE_IEEE80211A,
-					    params);
-	else if (wpa_s->setband == WPA_SETBAND_2G)
-		wpa_setband_scan_freqs_list(wpa_s, HOSTAPD_MODE_IEEE80211G,
-					    params);
 }
 
 
@@ -556,18 +503,6 @@ static void wpa_supplicant_scan(void *eloop_ctx, void *timeout_ctx)
 			return;
 		}
 	}
-
-#ifdef CONFIG_P2P
-	if ((wpa_s->p2p_in_provisioning || wpa_s->show_group_started) &&
-	    wpa_s->go_params) {
-		wpa_printf(MSG_DEBUG, "P2P: Use specific SSID for scan during "
-			   "P2P group formation");
-		params.ssids[0].ssid = wpa_s->go_params->ssid;
-		params.ssids[0].ssid_len = wpa_s->go_params->ssid_len;
-		params.num_ssids = 1;
-		goto ssid_list_set;
-	}
-#endif /* CONFIG_P2P */
 
 	/* Find the starting point from which to continue scanning */
 	ssid = wpa_s->conf->ssid;
@@ -666,9 +601,6 @@ static void wpa_supplicant_scan(void *eloop_ctx, void *timeout_ctx)
 		wpa_dbg(wpa_s, MSG_DEBUG, "Starting AP scan for wildcard "
 			"SSID");
 	}
-#ifdef CONFIG_P2P
-ssid_list_set:
-#endif /* CONFIG_P2P */
 
 	wpa_supplicant_optimize_freqs(wpa_s, &params);
 	extra_ie = wpa_supplicant_extra_ies(wpa_s, &params);
@@ -680,7 +612,6 @@ ssid_list_set:
 	} else
 		os_free(wpa_s->next_scan_freqs);
 	wpa_s->next_scan_freqs = NULL;
-	wpa_setband_scan_freqs(wpa_s, &params);
 
 	params.filter_ssids = wpa_supplicant_build_filter_ssids(
 		wpa_s->conf, &params.num_filter_ssids);
@@ -690,8 +621,7 @@ ssid_list_set:
 	}
 
 #ifdef CONFIG_P2P
-	if (wpa_s->p2p_in_provisioning ||
-	    (wpa_s->show_group_started && wpa_s->go_params)) {
+	if (wpa_s->p2p_in_provisioning) {
 		/*
 		 * The interface may not yet be in P2P mode, so we have to
 		 * explicitly request P2P probe to disable CCK rates.
@@ -833,20 +763,6 @@ int wpa_supplicant_req_sched_scan(struct wpa_supplicant *wpa_s)
 			wildcard = 1;
 		} else if (!ssid->disabled && ssid->ssid_len)
 			need_ssids++;
-
-#ifdef CONFIG_WPS
-		if (!ssid->disabled && ssid->key_mgmt == WPA_KEY_MGMT_WPS) {
-			/*
-			 * Normal scan is more reliable and faster for WPS
-			 * operations and since these are for short periods of
-			 * time, the benefit of trying to use sched_scan would
-			 * be limited.
-			 */
-			wpa_dbg(wpa_s, MSG_DEBUG, "Use normal scan instead of "
-				"sched_scan for WPS");
-			return -1;
-		}
-#endif /* CONFIG_WPS */
 	}
 	if (wildcard)
 		need_ssids++;
@@ -921,8 +837,6 @@ start_scan:
 
 	if (wpa_s->wps)
 		wps_ie = wpa_supplicant_extra_ies(wpa_s, &params);
-
-	wpa_setband_scan_freqs(wpa_s, &params);
 
 	if (wpa_s->sched_scan_intervals_supported) {
 		wpa_dbg(wpa_s, MSG_DEBUG, "Starting sched scan: "
@@ -1290,50 +1204,6 @@ static void dump_scan_res(struct wpa_scan_results *scan_res)
 }
 
 
-int wpa_supplicant_filter_bssid_match(struct wpa_supplicant *wpa_s,
-				      const u8 *bssid)
-{
-	size_t i;
-
-	if (wpa_s->bssid_filter == NULL)
-		return 1;
-
-	for (i = 0; i < wpa_s->bssid_filter_count; i++) {
-		if (os_memcmp(wpa_s->bssid_filter + i * ETH_ALEN, bssid,
-			      ETH_ALEN) == 0)
-			return 1;
-	}
-
-	return 0;
-}
-
-
-static void filter_scan_res(struct wpa_supplicant *wpa_s,
-			    struct wpa_scan_results *res)
-{
-	size_t i, j;
-
-	if (wpa_s->bssid_filter == NULL)
-		return;
-
-	for (i = 0, j = 0; i < res->num; i++) {
-		if (wpa_supplicant_filter_bssid_match(wpa_s,
-						      res->res[i]->bssid)) {
-			res->res[j++] = res->res[i];
-		} else {
-			os_free(res->res[i]);
-			res->res[i] = NULL;
-		}
-	}
-
-	if (res->num != j) {
-		wpa_printf(MSG_DEBUG, "Filtered out %d scan results",
-			   (int) (res->num - j));
-		res->num = j;
-	}
-}
-
-
 /**
  * wpa_supplicant_get_scan_results - Get scan results
  * @wpa_s: Pointer to wpa_supplicant data
@@ -1358,7 +1228,6 @@ wpa_supplicant_get_scan_results(struct wpa_supplicant *wpa_s,
 		wpa_dbg(wpa_s, MSG_DEBUG, "Failed to get scan results");
 		return NULL;
 	}
-	filter_scan_res(wpa_s, scan_res);
 
 #ifdef CONFIG_WPS
 	if (wpas_wps_in_progress(wpa_s)) {

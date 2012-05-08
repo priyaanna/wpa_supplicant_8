@@ -108,10 +108,6 @@ endif
 OBJS += ../src/utils/$(CONFIG_ELOOP).o
 OBJS_c += ../src/utils/$(CONFIG_ELOOP).o
 
-ifdef CONFIG_ELOOP_POLL
-CFLAGS += -DCONFIG_ELOOP_POLL
-endif
-
 
 ifdef CONFIG_EAPOL_TEST
 CFLAGS += -Werror -DEAPOL_TEST
@@ -716,10 +712,6 @@ ifdef CONFIG_IEEE80211N
 CFLAGS += -DCONFIG_IEEE80211N
 endif
 
-ifdef CONFIG_ROAMING
-CFLAGS += -DCONFIG_ROAMING
-endif
-
 ifdef NEED_AP_MLME
 OBJS += ../src/ap/wmm.o
 OBJS += ../src/ap/ap_list.o
@@ -731,9 +723,6 @@ ifdef CONFIG_WPS
 CFLAGS += -DEAP_SERVER_WSC
 OBJS += ../src/ap/wps_hostapd.o
 OBJS += ../src/eap_server/eap_server_wsc.o
-endif
-ifdef CONFIG_INTERWORKING
-OBJS += ../src/ap/gas_serv.o
 endif
 endif
 

@@ -2,8 +2,14 @@
  * WPA Supplicant
  * Copyright (c) 2003-2012, Jouni Malinen <j@w1.fi>
  *
- * This software may be distributed under the terms of the BSD license.
- * See README for more details.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * Alternatively, this software may be distributed under the terms of BSD
+ * license.
+ *
+ * See README and COPYING for more details.
  *
  * This file implements functions for registering and unregistering
  * %wpa_supplicant interfaces. In addition, this file contains number of
@@ -51,8 +57,11 @@ const char *wpa_supplicant_version =
 "Copyright (c) 2003-2012, Jouni Malinen <j@w1.fi> and contributors";
 
 const char *wpa_supplicant_license =
-"This software may be distributed under the terms of the BSD license.\n"
-"See README for more details.\n"
+"This program is free software. You can distribute it and/or modify it\n"
+"under the terms of the GNU General Public License version 2.\n"
+"\n"
+"Alternatively, this software may be distributed under the terms of the\n"
+"BSD license. See README and COPYING for more details.\n"
 #ifdef EAP_TLS_OPENSSL
 "\nThis product includes software developed by the OpenSSL Project\n"
 "for use in the OpenSSL Toolkit (http://www.openssl.org/)\n"
@@ -62,9 +71,22 @@ const char *wpa_supplicant_license =
 #ifndef CONFIG_NO_STDOUT_DEBUG
 /* Long text divided into parts in order to fit in C89 strings size limits. */
 const char *wpa_supplicant_full_license1 =
-"";
+"This program is free software; you can redistribute it and/or modify\n"
+"it under the terms of the GNU General Public License version 2 as\n"
+"published by the Free Software Foundation.\n"
+"\n"
+"This program is distributed in the hope that it will be useful,\n"
+"but WITHOUT ANY WARRANTY; without even the implied warranty of\n"
+"MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n"
+"GNU General Public License for more details.\n"
+"\n";
 const char *wpa_supplicant_full_license2 =
-"This software may be distributed under the terms of the BSD license.\n"
+"You should have received a copy of the GNU General Public License\n"
+"along with this program; if not, write to the Free Software\n"
+"Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA\n"
+"\n"
+"Alternatively, this software may be distributed under the terms of the\n"
+"BSD license.\n"
 "\n"
 "Redistribution and use in source and binary forms, with or without\n"
 "modification, are permitted provided that the following conditions are\n"
@@ -348,7 +370,7 @@ void wpa_supplicant_set_non_wpa_policy(struct wpa_supplicant *wpa_s,
 }
 
 
-void free_hw_features(struct wpa_supplicant *wpa_s)
+static void free_hw_features(struct wpa_supplicant *wpa_s)
 {
 	int i;
 	if (wpa_s->hw.modes == NULL)
@@ -445,9 +467,6 @@ static void wpa_supplicant_cleanup(struct wpa_supplicant *wpa_s)
 	wpa_s->gas = NULL;
 
 	free_hw_features(wpa_s);
-
-	os_free(wpa_s->bssid_filter);
-	wpa_s->bssid_filter = NULL;
 }
 
 
@@ -640,9 +659,6 @@ void wpa_supplicant_set_state(struct wpa_supplicant *wpa_s,
 	else
 		wpa_supplicant_stop_bgscan(wpa_s);
 #endif /* CONFIG_BGSCAN */
-
-	if (state == WPA_COMPLETED || state == WPA_DISCONNECTED)
-		wpa_supplicant_clear_roaming(wpa_s, 0);
 
 	if (wpa_s->wpa_state != old_state) {
 		wpas_notify_state_changed(wpa_s, wpa_s->wpa_state, old_state);
@@ -1152,8 +1168,6 @@ void wpa_supplicant_associate(struct wpa_supplicant *wpa_s,
 
 	os_memset(&params, 0, sizeof(params));
 	wpa_s->reassociate = 0;
-	wpa_s->roaming = 0;
-
 	if (bss && !wpas_driver_bss_selection(wpa_s)) {
 #ifdef CONFIG_IEEE80211R
 		const u8 *ie, *md = NULL;
@@ -1270,10 +1284,11 @@ void wpa_supplicant_associate(struct wpa_supplicant *wpa_s,
 		u8 *pos;
 		size_t len;
 		int res;
+		int p2p_group;
+		p2p_group = wpa_s->drv_flags & WPA_DRIVER_FLAGS_P2P_CAPABLE;
 		pos = wpa_ie + wpa_ie_len;
 		len = sizeof(wpa_ie) - wpa_ie_len;
-		res = wpas_p2p_assoc_req_ie(wpa_s, bss, pos, len,
-					    ssid->p2p_group);
+		res = wpas_p2p_assoc_req_ie(wpa_s, bss, pos, len, p2p_group);
 		if (res >= 0)
 			wpa_ie_len += res;
 	}
@@ -1529,15 +1544,10 @@ void wpa_supplicant_disassociate(struct wpa_supplicant *wpa_s,
 				 int reason_code)
 {
 	u8 *addr = NULL;
-	union wpa_event_data event;
 
 	if (!is_zero_ether_addr(wpa_s->bssid)) {
 		wpa_drv_disassociate(wpa_s, wpa_s->bssid, reason_code);
 		addr = wpa_s->bssid;
-		os_memset(&event, 0, sizeof(event));
-		event.disassoc_info.reason_code = (u16) reason_code;
-		event.disassoc_info.locally_generated = 1;
-		wpa_supplicant_event(wpa_s, EVENT_DISASSOC, &event);
 	}
 
 	wpa_supplicant_clear_connection(wpa_s, addr);
@@ -1556,15 +1566,10 @@ void wpa_supplicant_deauthenticate(struct wpa_supplicant *wpa_s,
 				   int reason_code)
 {
 	u8 *addr = NULL;
-	union wpa_event_data event;
 
 	if (!is_zero_ether_addr(wpa_s->bssid)) {
 		wpa_drv_deauthenticate(wpa_s, wpa_s->bssid, reason_code);
 		addr = wpa_s->bssid;
-		os_memset(&event, 0, sizeof(event));
-		event.deauth_info.reason_code = (u16) reason_code;
-		event.deauth_info.locally_generated = 1;
-		wpa_supplicant_event(wpa_s, EVENT_DEAUTH, &event);
 	}
 
 	wpa_supplicant_clear_connection(wpa_s, addr);
@@ -2129,31 +2134,6 @@ int wpa_supplicant_update_mac_addr(struct wpa_supplicant *wpa_s)
 }
 
 
-static void wpa_supplicant_rx_eapol_bridge(void *ctx, const u8 *src_addr,
-					   const u8 *buf, size_t len)
-{
-	struct wpa_supplicant *wpa_s = ctx;
-	const struct l2_ethhdr *eth;
-
-	if (len < sizeof(*eth))
-		return;
-	eth = (const struct l2_ethhdr *) buf;
-
-	if (os_memcmp(eth->h_dest, wpa_s->own_addr, ETH_ALEN) != 0 &&
-	    !(eth->h_dest[0] & 0x01)) {
-		wpa_dbg(wpa_s, MSG_DEBUG, "RX EAPOL from " MACSTR " to " MACSTR
-			" (bridge - not for this interface - ignore)",
-			MAC2STR(src_addr), MAC2STR(eth->h_dest));
-		return;
-	}
-
-	wpa_dbg(wpa_s, MSG_DEBUG, "RX EAPOL from " MACSTR " to " MACSTR
-		" (bridge)", MAC2STR(src_addr), MAC2STR(eth->h_dest));
-	wpa_supplicant_rx_eapol(wpa_s, src_addr, buf + sizeof(*eth),
-				len - sizeof(*eth));
-}
-
-
 /**
  * wpa_supplicant_driver_init - Initialize driver interface parameters
  * @wpa_s: Pointer to wpa_supplicant data
@@ -2176,8 +2156,8 @@ int wpa_supplicant_driver_init(struct wpa_supplicant *wpa_s)
 		wpa_s->l2_br = l2_packet_init(wpa_s->bridge_ifname,
 					      wpa_s->own_addr,
 					      ETH_P_EAPOL,
-					      wpa_supplicant_rx_eapol_bridge,
-					      wpa_s, 1);
+					      wpa_supplicant_rx_eapol, wpa_s,
+					      0);
 		if (wpa_s->l2_br == NULL) {
 			wpa_msg(wpa_s, MSG_ERROR, "Failed to open l2_packet "
 				"connection for the bridge interface '%s'",
@@ -2226,7 +2206,7 @@ static struct wpa_supplicant * wpa_supplicant_alloc(void)
 	if (wpa_s == NULL)
 		return NULL;
 	wpa_s->scan_req = 1;
-	wpa_s->scan_interval = 15;
+	wpa_s->scan_interval = 5;
 	wpa_s->sched_scan_interval = 3;
 	wpa_s->new_connection = 1;
 	wpa_s->parent = wpa_s;
@@ -2412,48 +2392,6 @@ void wpa_supplicant_apply_ht_overrides(
 }
 
 #endif /* CONFIG_HT_OVERRIDES */
-
-
-static int pcsc_reader_init(struct wpa_supplicant *wpa_s)
-{
-#ifdef PCSC_FUNCS
-	size_t len;
-
-	if (!wpa_s->conf->pcsc_reader)
-		return 0;
-
-	wpa_s->scard = scard_init(SCARD_TRY_BOTH, wpa_s->conf->pcsc_reader);
-	if (!wpa_s->scard)
-		return 1;
-
-	if (wpa_s->conf->pcsc_pin &&
-	    scard_set_pin(wpa_s->scard, wpa_s->conf->pcsc_pin) < 0) {
-		scard_deinit(wpa_s->scard);
-		wpa_s->scard = NULL;
-		wpa_msg(wpa_s, MSG_ERROR, "PC/SC PIN validation failed");
-		return -1;
-	}
-
-	len = sizeof(wpa_s->imsi) - 1;
-	if (scard_get_imsi(wpa_s->scard, wpa_s->imsi, &len)) {
-		scard_deinit(wpa_s->scard);
-		wpa_s->scard = NULL;
-		wpa_msg(wpa_s, MSG_ERROR, "Could not read IMSI");
-		return -1;
-	}
-	wpa_s->imsi[len] = '\0';
-
-	wpa_s->mnc_len = scard_get_mnc_len(wpa_s->scard);
-
-	wpa_printf(MSG_DEBUG, "SCARD: IMSI %s (MNC length %d)",
-		   wpa_s->imsi, wpa_s->mnc_len);
-
-	wpa_sm_set_scard_ctx(wpa_s->wpa, wpa_s->scard);
-	eapol_sm_register_scard_ctx(wpa_s->eapol, wpa_s->scard);
-#endif /* PCSC_FUNCS */
-
-	return 0;
-}
 
 
 static int wpa_supplicant_init_iface(struct wpa_supplicant *wpa_s,
@@ -2677,9 +2615,6 @@ next_driver:
 #endif /* CONFIG_P2P */
 
 	if (wpa_bss_init(wpa_s) < 0)
-		return -1;
-
-	if (pcsc_reader_init(wpa_s) < 0)
 		return -1;
 
 	return 0;
@@ -3069,8 +3004,6 @@ void wpa_supplicant_deinit(struct wpa_global *global)
 	os_free(global->params.ctrl_interface);
 	os_free(global->params.override_driver);
 	os_free(global->params.override_ctrl_interface);
-
-	os_free(global->p2p_disallow_freq);
 
 	os_free(global);
 	wpa_debug_close_syslog();

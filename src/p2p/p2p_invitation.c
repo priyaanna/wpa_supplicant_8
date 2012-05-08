@@ -2,8 +2,14 @@
  * Wi-Fi Direct - P2P Invitation procedure
  * Copyright (c) 2010, Atheros Communications
  *
- * This software may be distributed under the terms of the BSD license.
- * See README for more details.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * Alternatively, this software may be distributed under the terms of BSD
+ * license.
+ *
+ * See README and COPYING for more details.
  */
 
 #include "includes.h"
@@ -344,8 +350,6 @@ int p2p_invite_send(struct p2p_data *p2p, struct p2p_device *dev,
 	req = p2p_build_invitation_req(p2p, dev, go_dev_addr);
 	if (req == NULL)
 		return -1;
-	if (p2p->state != P2P_IDLE)
-		p2p_stop_listen_for_freq(p2p, freq);
 	wpa_msg(p2p->cfg->msg_ctx, MSG_DEBUG,
 		"P2P: Sending Invitation Request");
 	p2p_set_state(p2p, P2P_INVITE);

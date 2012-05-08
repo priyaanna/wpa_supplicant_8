@@ -2,8 +2,14 @@
  * P2P - IE builder
  * Copyright (c) 2009-2010, Atheros Communications
  *
- * This software may be distributed under the terms of the BSD license.
- * See README for more details.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * Alternatively, this software may be distributed under the terms of BSD
+ * license.
+ *
+ * See README and COPYING for more details.
  */
 
 #include "includes.h"
@@ -351,7 +357,7 @@ static void p2p_add_wps_string(struct wpabuf *buf, enum wps_attribute attr,
 }
 
 
-void p2p_build_wps_ie(struct p2p_data *p2p, struct wpabuf *buf, int pw_id,
+void p2p_build_wps_ie(struct p2p_data *p2p, struct wpabuf *buf, u16 pw_id,
 		      int all_attr)
 {
 	u8 *len;
@@ -369,14 +375,11 @@ void p2p_build_wps_ie(struct p2p_data *p2p, struct wpabuf *buf, int pw_id,
 		wpabuf_put_u8(buf, WPS_STATE_NOT_CONFIGURED);
 	}
 
-	if (pw_id >= 0) {
-		/* Device Password ID */
-		wpabuf_put_be16(buf, ATTR_DEV_PASSWORD_ID);
-		wpabuf_put_be16(buf, 2);
-		wpa_printf(MSG_DEBUG, "P2P: WPS IE Device Password ID: %d",
-			   pw_id);
-		wpabuf_put_be16(buf, pw_id);
-	}
+	/* Device Password ID */
+	wpabuf_put_be16(buf, ATTR_DEV_PASSWORD_ID);
+	wpabuf_put_be16(buf, 2);
+	wpa_printf(MSG_DEBUG, "P2P: WPS IE Device Password ID: %d", pw_id);
+	wpabuf_put_be16(buf, pw_id);
 
 	if (all_attr) {
 		wpabuf_put_be16(buf, ATTR_RESPONSE_TYPE);
