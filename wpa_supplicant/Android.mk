@@ -55,6 +55,11 @@ ifeq ($(TARGET_ARCH),arm)
 L_CFLAGS += -mabi=aapcs-linux
 endif
 
+# Check if the build is for OMAP5
+ifeq ($(TARGET_BOARD_PLATFORM),omap5)
+L_CFLAGS += -DUSES_TI_WL18XX
+endif
+
 # To allow non-ASCII characters in SSID
 L_CFLAGS += -DWPA_UNICODE_SSID
 

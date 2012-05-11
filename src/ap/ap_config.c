@@ -160,9 +160,16 @@ struct hostapd_config * hostapd_config_defaults(void)
 	conf->tx_queue[2] = txq_be;
 	conf->tx_queue[3] = txq_bk;
 
+#ifdef USES_TI_WL18XX
+	/* OMAP5 + WL18xx combination */
+	/* Temporary solution till the R8 driver supports HT Capabilities */
+	conf->ht_capab = HT_CAP_INFO_SMPS_DISABLED;
+#else
+	/* OMAP4 + WL12xx combination */
 	/* TEMP: hard-coded HT capabilities. We should get these from wiphy */
 	conf->ht_capab = HT_CAP_INFO_SHORT_GI20MHZ | HT_CAP_INFO_GREEN_FIELD |
 			 HT_CAP_INFO_RX_STBC_1 | HT_CAP_INFO_SMPS_DISABLED;
+#endif
 
 	return conf;
 }
