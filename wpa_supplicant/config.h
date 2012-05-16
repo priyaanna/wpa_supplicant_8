@@ -30,14 +30,14 @@
 #define DEFAULT_MAX_NUM_STA 128
 #define MAX_SCHED_SCAN_INTERVAL 3600
 #define MAX_NUM_SCHED_SCAN_SHORT_INTERVALS 14
-#define DEFAULT_SCHED_SCAN_SHORT_INTERVAL 10
+#define DEFAULT_SCHED_SCAN_SHORT_INTERVAL 5
 #define DEFAULT_SCHED_SCAN_LONG_INTERVAL 30
-#define DEFAULT_SCHED_SCAN_NUM_SHORT_INTERVALS 6
+#define DEFAULT_SCHED_SCAN_NUM_SHORT_INTERVALS 10
 #define DEFAULT_WFD_SESSION_MNGT_PORT	554
 
 #include "config_ssid.h"
 #include "wps/wps.h"
-
+#include "common/wpa_common.h"
 
 #define CFG_CHANGED_DEVICE_NAME BIT(0)
 #define CFG_CHANGED_CONFIG_METHODS BIT(1)
@@ -367,6 +367,7 @@ struct wpa_config {
 	char *p2p_ssid_postfix;
 	int persistent_reconnect;
 	int p2p_intra_bss;
+	struct wpa_wmm_ac_params wmm_ac_params[4];
 
 #define MAX_WPS_VENDOR_EXT 10
 	/**

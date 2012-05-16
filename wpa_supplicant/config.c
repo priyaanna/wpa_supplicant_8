@@ -2202,6 +2202,15 @@ struct wpa_config * wpa_config_alloc_empty(const char *ctrl_interface,
 					   const char *driver_param)
 {
 	struct wpa_config *config;
+	const int aCWmin = 4, aCWmax = 10;
+	const struct wpa_wmm_ac_params ac_bk =
+		{ aCWmin, aCWmax, 7, 0, 0 }; /* background traffic */
+	const struct wpa_wmm_ac_params ac_be =
+		{ aCWmin, aCWmax, 3, 0, 0 }; /* best effort traffic */
+	const struct wpa_wmm_ac_params ac_vi = /* video traffic */
+		{ aCWmin - 1, aCWmin, 2, 3000 / 32, 1 };
+	const struct wpa_wmm_ac_params ac_vo = /* voice traffic */
+		{ aCWmin - 2, aCWmin - 1, 2, 1500 / 32, 1 };
 
 	config = os_zalloc(sizeof(*config));
 	if (config == NULL)
@@ -2223,6 +2232,11 @@ struct wpa_config * wpa_config_alloc_empty(const char *ctrl_interface,
 	config->wfd_session_available = 1;
 	config->wfd_session_mgmt_port = DEFAULT_WFD_SESSION_MNGT_PORT;
 #endif /* CONFIG_WFD */
+
+	config->wmm_ac_params[0] = ac_be;
+	config->wmm_ac_params[1] = ac_bk;
+	config->wmm_ac_params[2] = ac_vi;
+	config->wmm_ac_params[3] = ac_vo;
 
 	if (ctrl_interface)
 		config->ctrl_interface = os_strdup(ctrl_interface);
